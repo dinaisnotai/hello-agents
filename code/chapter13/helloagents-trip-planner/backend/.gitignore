@@ -41,6 +41,8 @@ ENV/
 *.log
 
 # 测试
+!tests/
+!tests/test_*.py
 .pytest_cache/
 .coverage
 htmlcov/

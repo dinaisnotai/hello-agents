@@ -12,7 +12,7 @@ import httpx
 
 from ..config import get_settings
 from ..models.schemas import Location, POIInfo, RouteInfo, WeatherInfo
-from .place_name_service import place_names_match
+from .place_name_service import normalize_place_name, place_names_match
 
 AMAP_API_BASE_URL = "https://restapi.amap.com/v3"
 
@@ -280,6 +280,11 @@ class AmapService:
             address = item.get("address")
             if not isinstance(address, str):
                 address = city
+            tel = item.get("tel")
+            if isinstance(tel, list):
+                tel = ";".join(str(value) for value in tel if value)
+            elif not isinstance(tel, str):
+                tel = None
             pois.append(
                 POIInfo(
                     id=str(item.get("id") or item.get("poi_id") or ""),
@@ -287,7 +292,7 @@ class AmapService:
                     type=str(item.get("type") or item.get("category") or keywords or "景点"),
                     address=address or city,
                     location=location,
-                    tel=item.get("tel"),
+                    tel=tel,
                     rating=self._safe_float(item.get("rating") or biz_ext.get("rating")),
                     ticket_price=self._estimate_ticket_price(str(item.get("type") or keywords)),
                 )
@@ -362,24 +367,59 @@ class AmapService:
 
     def _fallback_pois(self, city: str, keywords: str) -> List[POIInfo]:
         names_by_city = {
-            "北京": ["故宫博物院", "天坛公园", "颐和园", "国家博物馆", "什刹海", "南锣鼓巷"],
-            "上海": ["外滩", "上海博物馆", "豫园", "陆家嘴", "武康路", "静安寺"],
-            "杭州": ["西湖", "灵隐寺", "浙江省博物馆", "河坊街", "西溪湿地", "龙井村"],
-            "成都": ["武侯祠", "宽窄巷子", "杜甫草堂", "金沙遗址博物馆", "锦里", "人民公园"],
+            "北京": [
+                ("故宫博物院", "博物馆;文物古迹"),
+                ("天坛公园", "公园;文物古迹"),
+                ("颐和园", "公园;文物古迹"),
+                ("国家博物馆", "博物馆"),
+                ("什刹海", "湖泊;历史街区"),
+                ("南锣鼓巷", "历史街区;商业街"),
+            ],
+            "上海": [
+                ("外滩", "历史建筑"),
+                ("上海博物馆", "博物馆"),
+                ("豫园", "园林;文物古迹"),
+                ("陆家嘴", "城市观光"),
+                ("武康路", "历史街区"),
+                ("静安寺", "寺庙;宗教场所"),
+            ],
+            "杭州": [
+                ("西湖", "湖泊;自然风光"),
+                ("灵隐寺", "寺庙;宗教场所"),
+                ("浙江省博物馆", "博物馆"),
+                ("河坊街", "历史街区;商业街"),
+                ("西溪湿地", "湿地;自然风光"),
+                ("龙井村", "乡村;自然风光"),
+            ],
+            "成都": [
+                ("武侯祠", "文物古迹"),
+                ("宽窄巷子", "历史街区;商业街"),
+                ("杜甫草堂", "园林;文物古迹"),
+                ("金沙遗址博物馆", "博物馆;遗址"),
+                ("锦里", "历史街区;商业街"),
+                ("人民公园", "公园"),
+            ],
         }
-        names = names_by_city.get(city, [f"{city}{keywords}{i}" for i in range(1, 7)])
-        names = sorted(names, key=lambda name: not place_names_match(keywords, name))
+        entries = names_by_city.get(city)
+        if not entries:
+            return []
+        ranked_entries = sorted(
+            enumerate(entries),
+            key=lambda item: not (
+                place_names_match(keywords, item[1][0]) or keywords in item[1][1]
+            ),
+        )
         pois = []
-        for index, name in enumerate(names):
+        for original_index, (name, category) in ranked_entries:
             pois.append(
                 POIInfo(
-                    id=f"fallback-{city}-{index}",
+                    id=f"fallback-{city}-{normalize_place_name(name)}",
                     name=name,
-                    type=keywords or "景点",
+                    type=category,
                     address=f"{city}市中心区域",
-                    location=self._fallback_location(city, index),
-                    rating=4.5 - (index % 3) * 0.1,
-                    ticket_price=self._estimate_ticket_price(keywords),
+                    location=self._fallback_location(city, original_index),
+                    rating=4.5 - (original_index % 3) * 0.1,
+                    ticket_price=self._estimate_ticket_price(category),
                 )
             )
         return pois

@@ -89,7 +89,13 @@
             </a-col>
             <a-col :xs="24" :md="8">
               <a-form-item label="避开类型">
-                <a-select v-model:value="formData.avoid_categories" mode="tags" size="large" placeholder="如：购物、爬山" />
+                <a-select
+                  v-model:value="formData.avoid_categories"
+                  mode="multiple"
+                  :options="avoidCategoryOptions"
+                  size="large"
+                  placeholder="请选择需要避开的类型"
+                />
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="8">
@@ -130,6 +136,17 @@ const paceOptions = [
 ]
 
 const preferenceOptions = ['历史文化', '自然风光', '美食', '博物馆', '城市漫步', '亲子', '休闲']
+
+const avoidCategoryOptions = [
+  { label: '公园园林', value: 'park' },
+  { label: '博物馆展馆', value: 'museum' },
+  { label: '购物商场', value: 'shopping' },
+  { label: '寺庙宗教场所', value: 'temple' },
+  { label: '游乐园', value: 'amusement' },
+  { label: '动物园和海洋馆', value: 'zoo' },
+  { label: '自然风光', value: 'natural' },
+  { label: '历史古迹', value: 'historic' }
+]
 
 type TripFormState = Omit<TripFormData, 'start_date' | 'end_date'> & {
   start_date: Dayjs | null

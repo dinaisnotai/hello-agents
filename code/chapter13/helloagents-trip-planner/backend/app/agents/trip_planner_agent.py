@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from ..models.schemas import (
     Attraction,
@@ -13,6 +14,7 @@ from ..models.schemas import (
     DayPlan,
     Hotel,
     Meal,
+    POIInfo,
     ReplanRequest,
     RouteSegment,
     TripPlan,
@@ -20,8 +22,20 @@ from ..models.schemas import (
     WeatherInfo,
 )
 from ..services.amap_service import AmapService, get_amap_service
-from ..services.place_name_service import place_names_match
+from ..services.place_name_service import normalize_place_name, place_names_match
+from ..services.poi_category_service import POI_CATEGORY_LABELS, classify_poi
 from ..services.rag_service import TravelGuideRAG, get_travel_guide_rag
+
+
+@dataclass
+class _POICandidate:
+    """A POI plus the planning metadata that raw map results do not contain."""
+
+    poi: POIInfo
+    matched_preferences: Set[str] = field(default_factory=set)
+    categories: Set[str] = field(default_factory=set)
+    is_must_visit: bool = False
+    score: float = 0
 
 
 class POICollector:
@@ -29,55 +43,144 @@ class POICollector:
         self.amap_service = amap_service
 
     def collect_attractions(self, request: TripRequest) -> List[Attraction]:
-        keywords = request.preferences or ["景点", "博物馆", "公园"]
-        candidates: Dict[str, Attraction] = {}
+        recalled = self._recall_candidates(request)
+        filtered = self._filter_candidates(recalled, request)
+        deduplicated = self._deduplicate_candidates(filtered)
+        scored = self._score_candidates(deduplicated, request)
+        selected = self._select_candidates(scored, limit=30)
+        return [self._to_attraction(candidate, request) for candidate in selected]
 
+    def _recall_candidates(self, request: TripRequest) -> List[_POICandidate]:
+        """Recall broadly, while keeping the source of every result explicit."""
+
+        candidates: List[_POICandidate] = []
+        keywords = request.preferences or ["景点", "博物馆", "公园"]
         for keyword in keywords[:4]:
-            for poi in self.amap_service.search_poi(keyword, request.city):
-                if self._is_avoided(poi.type, request.avoid_categories):
-                    continue
-                candidates[poi.name] = Attraction(
-                    name=poi.name,
-                    address=poi.address,
-                    location=poi.location,
-                    visit_duration=self._duration_for(request.pace),
-                    description=f"{poi.name}适合{keyword}主题旅行。",
-                    category=poi.type,
-                    rating=poi.rating,
-                    poi_id=poi.id,
-                    ticket_price=poi.ticket_price,
-                    score=self._score_poi(poi.name, poi.type, request),
+            for poi in self._safe_search(keyword, request.city):
+                candidates.append(
+                    _POICandidate(
+                        poi=poi,
+                        matched_preferences={keyword},
+                        categories=classify_poi(poi.name, poi.type),
+                    )
                 )
 
+        # Must-visits get a dedicated recall pass. A search result is only
+        # promoted when its name actually matches what the user requested.
         for must_visit in request.must_visit:
-            matched_key = next(
-                (name for name in candidates if place_names_match(must_visit, name)),
+            matches = [
+                poi
+                for poi in self._safe_search(must_visit, request.city)
+                if place_names_match(must_visit, poi.name)
+            ]
+            if matches:
+                poi = matches[0]
+                candidates.append(
+                    _POICandidate(
+                        poi=poi,
+                        categories=classify_poi(poi.name, poi.type),
+                        is_must_visit=True,
+                    )
+                )
+
+        # A must-visit may already have been found by an interest query even if
+        # its dedicated search failed, so mark those results as well.
+        for candidate in candidates:
+            if any(place_names_match(name, candidate.poi.name) for name in request.must_visit):
+                candidate.is_must_visit = True
+        return candidates
+
+    def _filter_candidates(
+        self, candidates: List[_POICandidate], request: TripRequest
+    ) -> List[_POICandidate]:
+        """Apply hard exclusions before any ranking happens."""
+
+        return [
+            candidate
+            for candidate in candidates
+            if not candidate.categories.intersection(request.avoid_categories)
+        ]
+
+    def _deduplicate_candidates(self, candidates: List[_POICandidate]) -> List[_POICandidate]:
+        """Merge duplicate IDs and aliases without losing must-visit metadata."""
+
+        unique: List[_POICandidate] = []
+        for candidate in candidates:
+            existing = next(
+                (item for item in unique if self._same_poi(item.poi, candidate.poi)),
                 None,
             )
-            if matched_key is not None:
-                candidates[matched_key].score = max(candidates[matched_key].score, 100)
-            else:
-                poi = self.amap_service.search_poi(must_visit, request.city)[0]
-                candidates[poi.name] = Attraction(
-                    name=poi.name,
-                    address=poi.address,
-                    location=poi.location,
-                    visit_duration=self._duration_for(request.pace),
-                    description=f"{poi.name}是用户指定的必去地点。",
-                    category=poi.type,
-                    rating=poi.rating,
-                    poi_id=poi.id,
-                    ticket_price=poi.ticket_price,
-                    score=100,
-                )
+            if existing is None:
+                unique.append(candidate)
+                continue
 
-        return sorted(candidates.values(), key=lambda item: item.score, reverse=True)[:30]
+            existing.is_must_visit = existing.is_must_visit or candidate.is_must_visit
+            existing.matched_preferences.update(candidate.matched_preferences)
+            existing.categories.update(candidate.categories)
+            if self._poi_quality(candidate.poi) > self._poi_quality(existing.poi):
+                existing.poi = candidate.poi
+        return unique
+
+    def _score_candidates(
+        self, candidates: List[_POICandidate], request: TripRequest
+    ) -> List[_POICandidate]:
+        """Score only after invalid and duplicate tool results are gone."""
+
+        for candidate in candidates:
+            candidate.score = self._score_poi(candidate.poi.name, candidate.poi.type or "", request)
+            if candidate.is_must_visit:
+                candidate.score = max(candidate.score, 100)
+        return candidates
+
+    def _select_candidates(
+        self, candidates: List[_POICandidate], limit: int
+    ) -> List[_POICandidate]:
+        """Reserve capacity for must-visits; truncate only optional candidates."""
+
+        must_visits = sorted(
+            (item for item in candidates if item.is_must_visit),
+            key=lambda item: item.score,
+            reverse=True,
+        )
+        optional = sorted(
+            (item for item in candidates if not item.is_must_visit),
+            key=lambda item: item.score,
+            reverse=True,
+        )
+        optional_limit = max(0, limit - len(must_visits))
+        return must_visits + optional[:optional_limit]
+
+    def _to_attraction(self, candidate: _POICandidate, request: TripRequest) -> Attraction:
+        poi = candidate.poi
+        if candidate.is_must_visit:
+            description = f"{poi.name}是用户指定的必去地点。"
+        else:
+            themes = "、".join(sorted(candidate.matched_preferences)) or "综合"
+            description = f"{poi.name}适合{themes}主题旅行。"
+        return Attraction(
+            name=poi.name,
+            address=poi.address,
+            location=poi.location,
+            visit_duration=self._duration_for(request.pace),
+            description=description,
+            category=poi.type,
+            rating=poi.rating,
+            poi_id=poi.id,
+            ticket_price=poi.ticket_price,
+            score=candidate.score,
+        )
 
     def collect_hotel(self, request: TripRequest) -> Hotel:
         keyword = f"{request.hotel_area or request.city} {request.accommodation} 酒店"
-        pois = self.amap_service.search_poi(keyword, request.city)
-        poi = pois[0]
         nightly_cost = 350 if "经济" in request.accommodation else 650 if "舒适" in request.accommodation else 1000
+        pois = self._safe_search(keyword, request.city)
+        if not pois:
+            return Hotel(
+                name=f"{request.hotel_area or request.city}待确认酒店",
+                type=request.accommodation,
+                estimated_cost=nightly_cost,
+            )
+        poi = pois[0]
         return Hotel(
             name=poi.name if "酒店" in poi.name else f"{request.hotel_area or request.city}推荐酒店",
             address=poi.address,
@@ -93,14 +196,24 @@ class POICollector:
         score = 50.0
         score += 40 if any(place_names_match(must, name) for must in request.must_visit) else 0
         score += 8 if any(pref in category or pref in name for pref in request.preferences) else 0
-        score -= 30 if self._is_avoided(category, request.avoid_categories) else 0
         return score
 
     def _duration_for(self, pace: str) -> int:
         return {"relaxed": 150, "balanced": 120, "packed": 90}.get(pace, 120)
 
-    def _is_avoided(self, category: str, avoid_categories: List[str]) -> bool:
-        return any(item and item in category for item in avoid_categories)
+    def _safe_search(self, keyword: str, city: str) -> List[POIInfo]:
+        try:
+            return self.amap_service.search_poi(keyword, city) or []
+        except Exception:
+            return []
+
+    def _same_poi(self, left: POIInfo, right: POIInfo) -> bool:
+        if left.id and right.id and left.id == right.id:
+            return True
+        return place_names_match(left.name, right.name)
+
+    def _poi_quality(self, poi: POIInfo) -> tuple:
+        return (bool(poi.id), poi.rating or 0, len(normalize_place_name(poi.name)))
 
 
 class RouteEvaluator:
@@ -204,6 +317,27 @@ class ConstraintChecker:
                     expected="必须出现在行程中",
                     severity="blocker" if not passed else "info",
                     message="必去景点已覆盖" if passed else "需要在重规划中优先加入",
+                )
+            )
+
+        all_attractions = [attraction for day in plan.days for attraction in day.attractions]
+        for avoided_category in request.avoid_categories:
+            violations = [
+                attraction.name
+                for attraction in all_attractions
+                if avoided_category
+                in classify_poi(attraction.name, attraction.category or "")
+            ]
+            passed = not violations
+            label = POI_CATEGORY_LABELS[avoided_category]
+            items.append(
+                ConstraintItem(
+                    name=f"避开类型：{label}",
+                    passed=passed,
+                    actual="未安排该类型" if passed else f"发现：{', '.join(violations)}",
+                    expected=f"行程中不包含{label}",
+                    severity="blocker" if not passed else "info",
+                    message="避开类型已满足" if passed else "候选过滤未完全生效，需要重新规划",
                 )
             )
 
@@ -313,14 +447,25 @@ class MultiAgentTripPlanner:
     def _assign_days(self, request: TripRequest, attractions: List[Attraction], hotel: Hotel) -> List[DayPlan]:
         start_date = datetime.strptime(request.start_date, "%Y-%m-%d")
         per_day = {"relaxed": 2, "balanced": 3, "packed": 3}.get(request.pace, 3)
-        selected = attractions[: max(request.travel_days * per_day, len(request.must_visit))]
+        unique_attractions: Dict[str, Attraction] = {}
+        for attraction in attractions:
+            key = normalize_place_name(attraction.name)
+            existing = unique_attractions.get(key)
+            if existing is None or attraction.score > existing.score:
+                unique_attractions[key] = attraction
+
+        selected = list(unique_attractions.values())[
+            : max(request.travel_days * per_day, len(request.must_visit))
+        ]
+        base_count, extra_count = divmod(len(selected), request.travel_days)
+        selection_offset = 0
         days: List[DayPlan] = []
 
         for day_index in range(request.travel_days):
             current_date = start_date + timedelta(days=day_index)
-            day_attractions = selected[day_index * per_day : (day_index + 1) * per_day]
-            if not day_attractions and selected:
-                day_attractions = selected[-2:]
+            day_count = base_count + (1 if day_index < extra_count else 0)
+            day_attractions = selected[selection_offset : selection_offset + day_count]
+            selection_offset += day_count
             days.append(
                 DayPlan(
                     date=current_date.strftime("%Y-%m-%d"),

@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
+
+
+AvoidCategory = Literal[
+    "park",
+    "museum",
+    "shopping",
+    "temple",
+    "amusement",
+    "zoo",
+    "natural",
+    "historic",
+]
 
 
 class TripRequest(BaseModel):
@@ -22,7 +34,7 @@ class TripRequest(BaseModel):
     budget_limit: Optional[int] = Field(default=None, ge=0, description="Total budget limit in CNY")
     pace: str = Field(default="balanced", description="Trip pace: relaxed/balanced/packed")
     must_visit: List[str] = Field(default_factory=list, description="Must-visit attractions")
-    avoid_categories: List[str] = Field(default_factory=list, description="Categories to avoid")
+    avoid_categories: List[AvoidCategory] = Field(default_factory=list, description="Canonical POI categories to avoid")
     dietary_restrictions: List[str] = Field(default_factory=list, description="Dietary restrictions")
     max_daily_walk_km: Optional[float] = Field(default=None, ge=0, description="Max daily walking distance")
     hotel_area: Optional[str] = Field(default="", description="Preferred hotel area")
@@ -41,7 +53,7 @@ class TripRequest(BaseModel):
                 "budget_limit": 2500,
                 "pace": "balanced",
                 "must_visit": ["故宫"],
-                "avoid_categories": ["购物"],
+                "avoid_categories": ["shopping"],
                 "dietary_restrictions": ["不吃海鲜"],
                 "max_daily_walk_km": 8,
                 "hotel_area": "东城区",

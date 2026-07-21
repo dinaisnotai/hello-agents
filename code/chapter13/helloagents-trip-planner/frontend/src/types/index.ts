@@ -119,6 +119,16 @@ export interface TripPlan {
   evidence_sources: EvidenceSource[]
 }
 
+export type AvoidCategory =
+  | 'park'
+  | 'museum'
+  | 'shopping'
+  | 'temple'
+  | 'amusement'
+  | 'zoo'
+  | 'natural'
+  | 'historic'
+
 export interface TripFormData {
   city: string
   start_date: string
@@ -131,7 +141,7 @@ export interface TripFormData {
   budget_limit?: number
   pace: 'relaxed' | 'balanced' | 'packed'
   must_visit: string[]
-  avoid_categories: string[]
+  avoid_categories: AvoidCategory[]
   dietary_restrictions: string[]
   max_daily_walk_km?: number
   hotel_area?: string
