@@ -116,7 +116,7 @@
 import { reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import type { Dayjs } from 'dayjs'
+import dayjs, { type Dayjs } from 'dayjs'
 import { generateTripPlan } from '@/services/api'
 import type { TripFormData } from '@/types'
 
@@ -138,8 +138,8 @@ type TripFormState = Omit<TripFormData, 'start_date' | 'end_date'> & {
 
 const formData = reactive<TripFormState>({
   city: '北京',
-  start_date: null,
-  end_date: null,
+  start_date: dayjs(),
+  end_date: dayjs().add(2, 'day'),
   travel_days: 3,
   transportation: '公共交通',
   accommodation: '经济型酒店',

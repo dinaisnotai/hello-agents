@@ -20,6 +20,7 @@ from ..models.schemas import (
     WeatherInfo,
 )
 from ..services.amap_service import AmapService, get_amap_service
+from ..services.place_name_service import place_names_match
 from ..services.rag_service import TravelGuideRAG, get_travel_guide_rag
 
 
@@ -49,9 +50,15 @@ class POICollector:
                 )
 
         for must_visit in request.must_visit:
-            if must_visit not in candidates:
+            matched_key = next(
+                (name for name in candidates if place_names_match(must_visit, name)),
+                None,
+            )
+            if matched_key is not None:
+                candidates[matched_key].score = max(candidates[matched_key].score, 100)
+            else:
                 poi = self.amap_service.search_poi(must_visit, request.city)[0]
-                candidates[must_visit] = Attraction(
+                candidates[poi.name] = Attraction(
                     name=poi.name,
                     address=poi.address,
                     location=poi.location,
@@ -84,7 +91,7 @@ class POICollector:
 
     def _score_poi(self, name: str, category: str, request: TripRequest) -> float:
         score = 50.0
-        score += 40 if any(must in name for must in request.must_visit) else 0
+        score += 40 if any(place_names_match(must, name) for must in request.must_visit) else 0
         score += 8 if any(pref in category or pref in name for pref in request.preferences) else 0
         score -= 30 if self._is_avoided(category, request.avoid_categories) else 0
         return score
@@ -188,7 +195,7 @@ class ConstraintChecker:
 
         all_names = [attr.name for day in plan.days for attr in day.attractions]
         for must_visit in request.must_visit:
-            passed = any(must_visit in name or name in must_visit for name in all_names)
+            passed = any(place_names_match(must_visit, name) for name in all_names)
             items.append(
                 ConstraintItem(
                     name=f"必去景点：{must_visit}",

@@ -12,6 +12,7 @@ import httpx
 
 from ..config import get_settings
 from ..models.schemas import Location, POIInfo, RouteInfo, WeatherInfo
+from .place_name_service import place_names_match
 
 AMAP_API_BASE_URL = "https://restapi.amap.com/v3"
 
@@ -367,6 +368,7 @@ class AmapService:
             "成都": ["武侯祠", "宽窄巷子", "杜甫草堂", "金沙遗址博物馆", "锦里", "人民公园"],
         }
         names = names_by_city.get(city, [f"{city}{keywords}{i}" for i in range(1, 7)])
+        names = sorted(names, key=lambda name: not place_names_match(keywords, name))
         pois = []
         for index, name in enumerate(names):
             pois.append(
