@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { TripFormData, TripPlanResponse } from '@/types'
+import type { ReplanRequest, TripFormData, TripPlanResponse } from '@/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -45,6 +45,19 @@ export async function generateTripPlan(formData: TripFormData): Promise<TripPlan
   } catch (error: any) {
     console.error('生成旅行计划失败:', error)
     throw new Error(error.response?.data?.detail || error.message || '生成旅行计划失败')
+  }
+}
+
+/**
+ * Recalculate route, budget, and constraints after user edits.
+ */
+export async function replanTrip(payload: ReplanRequest): Promise<TripPlanResponse> {
+  try {
+    const response = await apiClient.post<TripPlanResponse>('/api/trip/replan', payload)
+    return response.data
+  } catch (error: any) {
+    console.error('重规划失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || '重规划失败')
   }
 }
 

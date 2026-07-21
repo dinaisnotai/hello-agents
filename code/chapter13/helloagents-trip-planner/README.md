@@ -1,212 +1,73 @@
-# HelloAgents智能旅行助手 🌍✈️
+# 约束感知型多智能体旅行规划系统
 
-基于HelloAgents框架构建的智能旅行规划助手,集成高德地图MCP服务,提供个性化的旅行计划生成。
+这是基于 HelloAgents 教程项目二次改造的实习简历版 AI Agent 项目。系统不只生成一段行程文本，而是把 POI 获取、路线评估、预算估算、约束校验、规划复核拆成多个角色，并输出可解释、可评测的旅行计划。
 
-## ✨ 功能特点
+## 核心能力
 
-- 🤖 **AI驱动的旅行规划**: 基于HelloAgents框架的SimpleAgent,智能生成详细的多日旅程
-- 🗺️ **高德地图集成**: 通过MCP协议接入高德地图服务,支持景点搜索、路线规划、天气查询
-- 🧠 **智能工具调用**: Agent自动调用高德地图MCP工具,获取实时POI、路线和天气信息
-- 🎨 **现代化前端**: Vue3 + TypeScript + Vite,响应式设计,流畅的用户体验
-- 📱 **完整功能**: 包含住宿、交通、餐饮和景点游览时间推荐
+- 多角色规划：`POICollector`、`RouteEvaluator`、`BudgetEstimator`、`ConstraintChecker`、`PlannerReviewer`
+- 约束输入：预算上限、行程节奏、必去景点、避开类型、饮食限制、每日最大步行距离、住宿区域
+- 结构化输出：每日行程、路线段、预算明细、约束报告、风险提示、RAG 攻略证据
+- 轻量 RAG：检索 `backend/app/data/travel_guides/*.md`，为规划提供城市攻略、路线建议和避坑信息
+- 可评测：`backend/scripts/evaluate_planner.py` 生成约束满足率、平均耗时、预算和距离统计
+- 可离线演示：未配置高德 API Key 时自动使用本地 POI 和路线估算降级数据
 
-## 🏗️ 技术栈
+## 架构
 
-### 后端
-- **框架**: HelloAgents (基于SimpleAgent)
-- **API**: FastAPI
-- **MCP工具**: amap-mcp-server (高德地图)
-- **LLM**: 支持多种LLM提供商(OpenAI, DeepSeek等)
-
-### 前端
-- **框架**: Vue 3 + TypeScript
-- **构建工具**: Vite
-- **UI组件库**: Ant Design Vue
-- **地图服务**: 高德地图 JavaScript API
-- **HTTP客户端**: Axios
-
-## 📁 项目结构
-
-```
-helloagents-trip-planner/
-├── backend/                    # 后端服务
-│   ├── app/
-│   │   ├── agents/            # Agent实现
-│   │   │   └── trip_planner_agent.py
-│   │   ├── api/               # FastAPI路由
-│   │   │   ├── main.py
-│   │   │   └── routes/
-│   │   │       ├── trip.py
-│   │   │       └── map.py
-│   │   ├── services/          # 服务层
-│   │   │   ├── amap_service.py
-│   │   │   └── llm_service.py
-│   │   ├── models/            # 数据模型
-│   │   │   └── schemas.py
-│   │   └── config.py          # 配置管理
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── .gitignore
-├── frontend/                   # 前端应用
-│   ├── src/
-│   │   ├── components/        # Vue组件
-│   │   ├── services/          # API服务
-│   │   ├── types/             # TypeScript类型
-│   │   └── views/             # 页面视图
-│   ├── package.json
-│   └── vite.config.ts
-└── README.md
+```text
+Vue3 Form
+  -> FastAPI /api/trip/plan
+  -> POICollector         获取候选景点/酒店
+  -> TravelGuideRAG       检索本地城市攻略证据
+  -> RouteEvaluator       估算景点间路线距离和时长
+  -> BudgetEstimator      汇总门票/酒店/餐饮/交通预算
+  -> ConstraintChecker    检查预算、步行、必去点、饮食限制
+  -> PlannerReviewer      生成风险提示和复核建议
+  -> Vue3 Result          展示约束得分、路线、预算、证据来源
 ```
 
-## 🚀 快速开始
+## 运行
 
-### 前提条件
+后端：
 
-- Python 3.10+
-- Node.js 16+
-- 高德地图API密钥 (Web服务API和Web端(JS API))
-- LLM API密钥 (OpenAI/DeepSeek等)
-
-### 后端安装
-
-1. 进入后端目录
 ```bash
 cd backend
-```
-
-2. 创建虚拟环境
-```bash
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-```
-
-3. 安装依赖
-```bash
 pip install -r requirements.txt
+python run.py
 ```
 
-4. 配置环境变量
-```bash
-cp .env.example .env
-# 编辑.env文件,填入你的API密钥
-```
+前端：
 
-5. 启动后端服务
-```bash
-uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### 前端安装
-
-1. 进入前端目录
 ```bash
 cd frontend
-```
-
-2. 安装依赖
-```bash
 npm install
-```
-
-3. 配置环境变量
-```bash
-# 创建.env文件, 填入高德地图Web API Key 和 Web端JS API Key
-cp .env.example .env
-```
-
-4. 启动开发服务器
-```bash
 npm run dev
 ```
 
-5. 打开浏览器访问 `http://localhost:5173`
+环境变量：
 
-## 📝 使用指南
+- `AMAP_API_KEY`：可选。缺失时使用本地降级数据。
+- `LLM_API_KEY` / `OPENAI_API_KEY`：当前主流程不强依赖 LLM，后续可用于 PlannerReviewer 生成自然语言解释。
+- `VITE_API_BASE_URL`：默认 `http://localhost:8000`。
 
-1. 在首页填写旅行信息:
-   - 目的地城市
-   - 旅行日期和天数
-   - 交通方式偏好
-   - 住宿偏好
-   - 旅行风格标签
+## 评测
 
-2. 点击"生成旅行计划"按钮
-
-3. 系统将:
-   - 调用HelloAgents Agent生成初步计划
-   - Agent自动调用高德地图MCP工具搜索景点
-   - Agent获取天气信息和路线规划
-   - 整合所有信息生成完整行程
-
-4. 查看结果:
-   - 每日详细行程
-   - 景点信息与地图标记
-   - 交通路线规划
-   - 天气预报
-   - 餐饮推荐
-
-## 🔧 核心实现
-
-### HelloAgents Agent集成
-
-```python
-from hello_agents import SimpleAgent, HelloAgentsLLM
-from hello_agents.tools import MCPTool
-
-# 创建高德地图MCP工具
-amap_tool = MCPTool(
-    name="amap",
-    server_command=["uvx", "amap-mcp-server"],
-    env={"AMAP_MAPS_API_KEY": "your_api_key"},
-    auto_expand=True
-)
-
-# 创建旅行规划Agent
-agent = SimpleAgent(
-    name="旅行规划助手",
-    llm=HelloAgentsLLM(),
-    system_prompt="你是一个专业的旅行规划助手..."
-)
-
-# 添加工具
-agent.add_tool(amap_tool)
+```bash
+cd backend
+python scripts/evaluate_planner.py
 ```
 
-### MCP工具调用
+脚本会读取 `eval_cases.jsonl`，输出 `eval_report.md`。建议继续扩展到 100 条 case，覆盖预算紧张、亲子游、老人游、雨天、必去景点、饮食限制等场景。
 
-Agent可以自动调用以下高德地图MCP工具:
-- `maps_text_search`: 搜索景点POI
-- `maps_weather`: 查询天气
-- `maps_direction_walking_by_address`: 步行路线规划
-- `maps_direction_driving_by_address`: 驾车路线规划
-- `maps_direction_transit_integrated_by_address`: 公共交通路线规划
+## 简历写法草稿
 
-## 📄 API文档
+- 设计多角色 Agent 编排流程，将 POI 获取、路线评估、预算估算、约束校验、规划复核拆分为独立模块，降低单提示词生成不可控问题。
+- 实现预算、步行距离、必去景点、饮食限制等约束报告，并支持用户编辑景点顺序后重新计算路线、预算和约束得分。
+- 构建本地城市攻略 RAG 检索，为行程推荐提供路线建议和风险提示证据，减少纯 LLM 编造。
+- 编写离线评测脚本，统计约束满足率、平均耗时、预算误差、路线距离等指标，为简历中的量化结果提供真实来源。
 
-启动后端服务后,访问 `http://localhost:8000/docs` 查看完整的API文档。
+## 下一步可增强
 
-主要端点:
-- `POST /api/trip/plan` - 生成旅行计划
-- `GET /api/map/poi` - 搜索POI
-- `GET /api/map/weather` - 查询天气
-- `POST /api/map/route` - 规划路线
-
-## 🤝 贡献指南
-
-欢迎提交Pull Request或Issue!
-
-## 📜 开源协议
-
-CC BY-NC-SA 4.0
-
-## 🙏 致谢
-
-- [HelloAgents](https://github.com/datawhalechina/Hello-Agents) - 智能体教程
-- [HelloAgents框架](https://github.com/jjyaoao/HelloAgents) - 智能体框架
-- [高德地图开放平台](https://lbs.amap.com/) - 地图服务
-- [amap-mcp-server](https://github.com/sugarforever/amap-mcp-server) - 高德地图MCP服务器
-
----
-
-**HelloAgents智能旅行助手** - 让旅行计划变得简单而智能 🌈
-
+- 接入真实高德路线 API 并解析公交/步行方案
+- 扩展 100+ 条评测 case 和 badcase 复盘
+- 用 LLM 只做 Reviewer 文案生成，不参与事实获取
+- 增加 Docker Compose 和 CI 检查

@@ -1,12 +1,13 @@
 # my_main.py
 from dotenv import load_dotenv
 from my_llm import MyLLM # 注意：这里导入我们自己的类
-
+from hello_agents import SimpleAgent, HelloAgentsLLM
 # 加载环境变量
 load_dotenv()
 
 # 实例化我们重写的客户端，并指定provider
-llm = MyLLM(provider="modelscope") 
+# llm = MyLLM(provider="modelscope") 
+llm = HelloAgentsLLM()
 
 # 准备消息
 messages = [{"role": "user", "content": "你好，请介绍一下你自己。"}]

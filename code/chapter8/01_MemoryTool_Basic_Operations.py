@@ -5,12 +5,31 @@
 展示MemoryTool的核心execute方法和基本操作
 """
 
+# from dotenv import load_dotenv
+# load_dotenv()
+# from datetime import datetime
+# from typing import List
+# from hello_agents.tools import MemoryTool
 from dotenv import load_dotenv
 load_dotenv()
-from datetime import datetime
-from typing import List
-from hello_agents.tools import MemoryTool
 
+import os
+from urllib.parse import urlparse
+
+proxy = "http://127.0.0.1:33210"
+
+# Hugging Face 等外网请求走 VPN
+os.environ["HTTP_PROXY"] = proxy
+os.environ["HTTPS_PROXY"] = proxy
+
+# Qdrant Cloud 直连
+qdrant_url = os.getenv("QDRANT_URL", "")
+if qdrant_url:
+    qdrant_host = urlparse(qdrant_url).hostname
+    os.environ["NO_PROXY"] = qdrant_host
+    os.environ["no_proxy"] = qdrant_host
+
+from hello_agents.tools import MemoryTool
 def memory_tool_execute_demo():
     """MemoryTool execute方法演示"""
     print("🧠 MemoryTool基础操作演示")

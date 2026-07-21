@@ -2,8 +2,21 @@
 
 import os
 from pathlib import Path
-from typing import List
-from pydantic_settings import BaseSettings
+from typing import List, Union
+try:
+    from pydantic_settings import BaseSettings
+except ModuleNotFoundError:
+    from pydantic import BaseModel
+
+    class BaseSettings(BaseModel):
+        def __init__(self, **data):
+            env_data = {}
+            for name, field in self.model_fields.items():
+                value = os.getenv(name.upper())
+                if value is not None:
+                    env_data[name] = value
+            env_data.update(data)
+            super().__init__(**env_data)
 from dotenv import load_dotenv
 
 # 加载环境变量
@@ -22,7 +35,7 @@ class Settings(BaseSettings):
     # 应用基本配置
     app_name: str = "HelloAgents智能旅行助手"
     app_version: str = "1.0.0"
-    debug: bool = False
+    debug: Union[bool, str] = False
 
     # 服务器配置
     host: str = "0.0.0.0"
@@ -33,6 +46,7 @@ class Settings(BaseSettings):
 
     # 高德地图API配置
     amap_api_key: str = ""
+    amap_timeout_seconds: float = 8.0
 
     # Unsplash API配置
     unsplash_access_key: str = ""
@@ -72,7 +86,7 @@ def validate_config():
     warnings = []
 
     if not settings.amap_api_key:
-        errors.append("AMAP_API_KEY未配置")
+        warnings.append("AMAP_API_KEY未配置，将使用本地降级POI和路线估算")
 
     # HelloAgentsLLM会自动从LLM_API_KEY读取,不强制要求OPENAI_API_KEY
     llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")

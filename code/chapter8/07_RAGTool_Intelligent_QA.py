@@ -4,7 +4,8 @@
 代码示例 07: RAGTool智能问答系统
 展示完整的检索→上下文构建→答案生成流程
 """
-
+import os
+from hello_agents import HelloAgentsLLM
 import time
 from hello_agents.tools import RAGTool
 from dotenv import load_dotenv
@@ -18,6 +19,14 @@ class IntelligentQADemo:
             knowledge_base_path="./qa_demo_kb",
             rag_namespace="intelligent_qa_demo"
         )
+
+        self.rag_tool.llm = HelloAgentsLLM(
+            provider="custom",
+            model=os.getenv("LLM_MODEL_ID"),
+            api_key=os.getenv("LLM_API_KEY"),
+            base_url=os.getenv("LLM_BASE_URL"),
+        )
+
         self._setup_knowledge_base()
     
     def _setup_knowledge_base(self):

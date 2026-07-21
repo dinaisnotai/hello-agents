@@ -13,12 +13,71 @@
 from dotenv import load_dotenv
 load_dotenv()
 import os
+from hello_agents import HelloAgentsLLM
 import time
 import json
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from hello_agents.tools import MemoryTool, RAGTool
+from hello_agents.memory.rag import pipeline as rag_pipeline
+
+# 本应用不需要 Gradio 的联网遥测。关闭它可避免离线或代理环境下
+# 出现无关的连接超时，也不会影响本地 Web 界面及问答功能。
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
+
+# 本地 Web 请求不应经过 VPN/系统代理，否则 Gradio 的启动自检可能误判
+# localhost 不可访问。保留用户已有的 NO_PROXY 配置并补齐回环地址。
+_no_proxy_hosts = ["localhost", "127.0.0.1", "0.0.0.0"]
+for _no_proxy_var in ("NO_PROXY", "no_proxy"):
+    _existing_no_proxy = os.environ.get(_no_proxy_var, "")
+    _existing_hosts = [host.strip() for host in _existing_no_proxy.split(",") if host.strip()]
+    os.environ[_no_proxy_var] = ",".join(dict.fromkeys(_existing_hosts + _no_proxy_hosts))
+
 import gradio as gr
+from gradio_client import utils as gradio_client_utils
+
+
+# Gradio 4.44.1 尚不能处理新版 Pydantic JSON Schema 中合法的布尔节点
+#（例如 additionalProperties: true），会在打开首页时触发 ASGI 500。
+# 将兼容处理限制在本应用内，避免为了旧版 Gradio 降级全局 Pydantic。
+_gradio_schema_to_python_type = gradio_client_utils._json_schema_to_python_type
+
+
+def _json_schema_to_python_type_compat(schema, defs):
+    if isinstance(schema, bool):
+        return "Any"
+    return _gradio_schema_to_python_type(schema, defs)
+
+
+gradio_client_utils._json_schema_to_python_type = _json_schema_to_python_type_compat
+
+
+# MarkItDown/pdfminer 在部分 CNKI 生成的 PDF 上可能长时间卡住。对于带有
+# 文本层的 PDF，优先用 pypdf 逐页提取；扫描件提取不到文字时仍回退到
+# HelloAgents 原有的 MarkItDown 流程。
+_hello_agents_convert_to_markdown = rag_pipeline._convert_to_markdown
+
+
+def _convert_to_markdown_compat(path: str) -> str:
+    if os.path.splitext(path)[1].lower() != ".pdf":
+        return _hello_agents_convert_to_markdown(path)
+
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(path)
+        pages = [page.extract_text() or "" for page in reader.pages]
+        text = "\n\n".join(page.strip() for page in pages if page.strip())
+        if text.strip():
+            print(f"[RAG] pypdf 快速提取完成: {len(reader.pages)} 页, {len(text)} 字符")
+            return text
+    except Exception as exc:
+        print(f"[RAG] pypdf 快速提取失败，回退 MarkItDown: {exc}")
+
+    return _hello_agents_convert_to_markdown(path)
+
+
+rag_pipeline._convert_to_markdown = _convert_to_markdown_compat
 
 class PDFLearningAssistant:
     """智能文档问答助手"""
@@ -43,6 +102,13 @@ class PDFLearningAssistant:
             "questions_asked": 0,
             "concepts_learned": 0
         }
+
+        self.rag_tool.llm = HelloAgentsLLM(
+            provider="custom",
+            model=os.getenv("LLM_MODEL_ID"),
+            api_key=os.getenv("LLM_API_KEY"),
+            base_url=os.getenv("LLM_BASE_URL"),
+        )
 
         # 当前加载的文档
         self.current_document = None
@@ -263,8 +329,9 @@ def create_gradio_ui():
         if pdf_file is None:
             return "❌ 请上传PDF文件"
 
-        # Gradio上传的文件是临时文件对象
-        pdf_path = pdf_file.name
+        # type="filepath" 在 Gradio 4.x 中返回路径字符串；同时兼容旧版
+        # Gradio 返回的临时文件对象。
+        pdf_path = pdf_file if isinstance(pdf_file, str) else pdf_file.name
         result = assistant_state["assistant"].load_document(pdf_path)
 
         if result["success"]:
@@ -436,7 +503,7 @@ def main():
 
     demo = create_gradio_ui()
     demo.launch(
-        server_name="0.0.0.0",
+        server_name="127.0.0.1",
         server_port=7860,
         share=False,
         show_error=True
