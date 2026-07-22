@@ -92,6 +92,10 @@ export interface DayPlan {
   meals: Meal[]
   route_segments?: RouteSegment[]
   daily_distance_km?: number
+  daily_visit_minutes?: number
+  daily_travel_minutes?: number
+  daily_buffer_minutes?: number
+  daily_duration_minutes?: number
   daily_cost?: number
 }
 

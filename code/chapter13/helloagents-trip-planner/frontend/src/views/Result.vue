@@ -83,6 +83,10 @@
               <a-descriptions-item label="交通">{{ day.transportation }}</a-descriptions-item>
               <a-descriptions-item label="住宿">{{ day.hotel?.name || day.accommodation }}</a-descriptions-item>
               <a-descriptions-item label="当日距离">{{ day.daily_distance_km || 0 }} km</a-descriptions-item>
+              <a-descriptions-item label="游览时间">{{ formatMinutes(day.daily_visit_minutes) }}</a-descriptions-item>
+              <a-descriptions-item label="交通时间">{{ formatMinutes(day.daily_travel_minutes) }}</a-descriptions-item>
+              <a-descriptions-item label="餐饮及缓冲">{{ formatMinutes(day.daily_buffer_minutes) }}</a-descriptions-item>
+              <a-descriptions-item label="全天合计">{{ formatMinutes(day.daily_duration_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="当日费用">{{ day.daily_cost || 0 }} 元</a-descriptions-item>
             </a-descriptions>
 
@@ -153,8 +157,14 @@ const totalDistanceKm = computed(() => {
 
 const goBack = () => router.push('/')
 
+const formatMinutes = (minutes = 0) => {
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return hours ? `${hours}小时${rest ? `${rest}分钟` : ''}` : `${rest}分钟`
+}
+
 const dayTitle = (day: DayPlan) => {
-  return `第 ${day.day_index + 1} 天｜${day.date}｜${day.daily_distance_km || 0} km｜${day.daily_cost || 0} 元`
+  return `第 ${day.day_index + 1} 天｜${day.date}｜${formatMinutes(day.daily_duration_minutes)}｜${day.daily_distance_km || 0} km｜${day.daily_cost || 0} 元`
 }
 
 const moveAttraction = (dayIndex: number, attrIndex: number, direction: -1 | 1) => {

@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from ...agents.trip_planner_agent import get_trip_planner_agent
+from ...agents.multi_agent_orchestrator import get_multi_agent_orchestrator
 from ...models.schemas import ReplanRequest, TripPlanResponse, TripRequest
 
 router = APIRouter(prefix="/trip", tags=["Trip Planning"])
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/trip", tags=["Trip Planning"])
 )
 async def plan_trip(request: TripRequest):
     try:
-        planner = get_trip_planner_agent()
+        planner = get_multi_agent_orchestrator()
         trip_plan = await run_in_threadpool(planner.plan_trip, request)
         return TripPlanResponse(success=True, message="旅行计划生成成功", data=trip_plan)
     except Exception as exc:
@@ -31,7 +31,7 @@ async def plan_trip(request: TripRequest):
 )
 async def replan_trip(request: ReplanRequest):
     try:
-        planner = get_trip_planner_agent()
+        planner = get_multi_agent_orchestrator()
         trip_plan = await run_in_threadpool(planner.replan, request)
         return TripPlanResponse(success=True, message="行程已重新计算", data=trip_plan)
     except Exception as exc:
@@ -42,17 +42,7 @@ async def replan_trip(request: ReplanRequest):
 @router.get("/health", summary="Trip planner health check")
 async def health_check():
     try:
-        planner = get_trip_planner_agent()
-        return {
-            "status": "healthy",
-            "service": "constraint-aware-trip-planner",
-            "roles": [
-                planner.poi_collector.__class__.__name__,
-                planner.route_evaluator.__class__.__name__,
-                planner.budget_estimator.__class__.__name__,
-                planner.constraint_checker.__class__.__name__,
-                planner.reviewer.__class__.__name__,
-            ],
-        }
+        planner = get_multi_agent_orchestrator()
+        return planner.health_snapshot()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"服务不可用: {exc}") from exc

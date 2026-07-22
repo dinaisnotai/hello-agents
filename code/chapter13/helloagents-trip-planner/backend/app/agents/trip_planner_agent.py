@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 from ..models.schemas import (
     Attraction,
@@ -12,6 +12,7 @@ from ..models.schemas import (
     ConstraintItem,
     ConstraintReport,
     DayPlan,
+    EvidenceSource,
     Hotel,
     Meal,
     POIInfo,
@@ -25,6 +26,7 @@ from ..services.amap_service import AmapService, get_amap_service
 from ..services.place_name_service import normalize_place_name, place_names_match
 from ..services.poi_category_service import POI_CATEGORY_LABELS, classify_poi
 from ..services.rag_service import TravelGuideRAG, get_travel_guide_rag
+from ..services.spatial_planner import SpatialItineraryPlanner, get_pace_profile
 
 
 @dataclass
@@ -74,7 +76,7 @@ class POICollector:
                 if place_names_match(must_visit, poi.name)
             ]
             if matches:
-                poi = matches[0]
+                poi = max(matches, key=self._poi_quality)
                 candidates.append(
                     _POICandidate(
                         poi=poi,
@@ -139,13 +141,11 @@ class POICollector:
 
         must_visits = sorted(
             (item for item in candidates if item.is_must_visit),
-            key=lambda item: item.score,
-            reverse=True,
+            key=self._candidate_sort_key,
         )
         optional = sorted(
             (item for item in candidates if not item.is_must_visit),
-            key=lambda item: item.score,
-            reverse=True,
+            key=self._candidate_sort_key,
         )
         optional_limit = max(0, limit - len(must_visits))
         return must_visits + optional[:optional_limit]
@@ -199,7 +199,7 @@ class POICollector:
         return score
 
     def _duration_for(self, pace: str) -> int:
-        return {"relaxed": 150, "balanced": 120, "packed": 90}.get(pace, 120)
+        return get_pace_profile(pace).visit_duration_minutes
 
     def _safe_search(self, keyword: str, city: str) -> List[POIInfo]:
         try:
@@ -213,7 +213,25 @@ class POICollector:
         return place_names_match(left.name, right.name)
 
     def _poi_quality(self, poi: POIInfo) -> tuple:
-        return (bool(poi.id), poi.rating or 0, len(normalize_place_name(poi.name)))
+        return (
+            bool(poi.id),
+            poi.rating or 0,
+            len(normalize_place_name(poi.name)),
+            normalize_place_name(poi.name),
+            poi.id,
+            poi.location.longitude,
+            poi.location.latitude,
+        )
+
+    def _candidate_sort_key(self, candidate: _POICandidate) -> tuple:
+        poi = candidate.poi
+        return (
+            -candidate.score,
+            normalize_place_name(poi.name),
+            poi.id,
+            poi.location.longitude,
+            poi.location.latitude,
+        )
 
 
 class RouteEvaluator:
@@ -225,28 +243,36 @@ class RouteEvaluator:
         attractions = day.attractions
         if day.transportation == "步行":
             route_type = "walking"
-        elif day.transportation == "公共交通":
+        elif any(label in day.transportation for label in ("公共", "公交", "地铁")):
             route_type = "transit"
         else:
             route_type = "driving"
-        for index in range(len(attractions) - 1):
-            origin = attractions[index]
-            destination = attractions[index + 1]
+
+        route_nodes = [
+            (item.name, item.address, item.location) for item in attractions
+        ]
+        if attractions and day.hotel and day.hotel.location:
+            hotel_node = (day.hotel.name, day.hotel.address, day.hotel.location)
+            route_nodes = [hotel_node, *route_nodes, hotel_node]
+
+        for origin, destination in zip(route_nodes, route_nodes[1:]):
+            origin_name, origin_address, origin_location = origin
+            destination_name, destination_address, destination_location = destination
             route = self.amap_service.route_between_pois(
-                origin_name=origin.name,
-                origin_address=origin.address,
-                origin=origin.location,
-                destination_name=destination.name,
-                destination_address=destination.address,
-                destination=destination.location,
+                origin_name=origin_name,
+                origin_address=origin_address,
+                origin=origin_location,
+                destination_name=destination_name,
+                destination_address=destination_address,
+                destination=destination_location,
                 city=city,
                 route_type=route_type,
             )
             segments.append(
                 RouteSegment(
                     day_index=day.day_index,
-                    origin=origin.name,
-                    destination=destination.name,
+                    origin=origin_name,
+                    destination=destination_name,
                     route_type=route.route_type,
                     distance_meters=route.distance,
                     duration_minutes=max(1, int(route.duration / 60)),
@@ -353,6 +379,26 @@ class ConstraintChecker:
                 )
             )
 
+        time_budget = get_pace_profile(request.pace).daily_time_budget_minutes
+        longest_day = max(
+            (day.daily_duration_minutes for day in plan.days), default=0
+        )
+        time_passed = longest_day <= time_budget
+        items.append(
+            ConstraintItem(
+                name="每日行程时长",
+                passed=time_passed,
+                actual=f"最长{longest_day}分钟",
+                expected=f"不超过{time_budget}分钟",
+                severity="warning" if not time_passed else "info",
+                message=(
+                    "每日游览、交通和缓冲时间在节奏预算内"
+                    if time_passed
+                    else "长耗时或远郊活动已单独安排，但当天仍可能较累"
+                ),
+            )
+        )
+
         if not items:
             items.append(ConstraintItem(name="基础完整性", passed=True, message="行程结构完整"))
 
@@ -389,6 +435,7 @@ class MultiAgentTripPlanner:
         self.amap_service = get_amap_service()
         self.rag = get_travel_guide_rag()
         self.poi_collector = POICollector(self.amap_service)
+        self.spatial_planner = SpatialItineraryPlanner()
         self.route_evaluator = RouteEvaluator(self.amap_service)
         self.budget_estimator = BudgetEstimator()
         self.constraint_checker = ConstraintChecker()
@@ -398,13 +445,30 @@ class MultiAgentTripPlanner:
         attractions = self.poi_collector.collect_attractions(request)
         hotel = self.poi_collector.collect_hotel(request)
         weather = self._weather_for_dates(request)
-        evidence = self.rag.search(request.city, self._rag_query(request), top_k=5)
+        evidence = self.rag.search(request.city, self.build_rag_query(request), top_k=5)
+
+        return self.build_plan_from_inputs(
+            request=request,
+            attractions=attractions,
+            hotel=hotel,
+            weather=weather,
+            evidence=evidence,
+        )
+
+    def build_plan_from_inputs(
+        self,
+        request: TripRequest,
+        attractions: List[Attraction],
+        hotel: Hotel,
+        weather: List[WeatherInfo],
+        evidence: List[EvidenceSource],
+    ) -> TripPlan:
+        """Build a plan from specialist outputs without searching again."""
 
         days = self._assign_days(request, attractions, hotel)
         for day in days:
             day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
-            day.daily_distance_km = round(sum(seg.distance_meters for seg in day.route_segments) / 1000, 2)
-            day.daily_cost = self._daily_cost(day)
+            self._update_day_metrics(day, request.pace)
 
         route_segments = [segment for day in days for segment in day.route_segments]
         budget = self.budget_estimator.estimate(days, request)
@@ -435,8 +499,7 @@ class MultiAgentTripPlanner:
         )
         for day in plan.days:
             day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
-            day.daily_distance_km = round(sum(seg.distance_meters for seg in day.route_segments) / 1000, 2)
-            day.daily_cost = self._daily_cost(day)
+            self._update_day_metrics(day, request.pace)
         plan.route_segments = [segment for day in plan.days for segment in day.route_segments]
         plan.budget = self.budget_estimator.estimate(plan.days, request)
         plan.constraint_report = self.constraint_checker.check(plan, request)
@@ -446,26 +509,21 @@ class MultiAgentTripPlanner:
 
     def _assign_days(self, request: TripRequest, attractions: List[Attraction], hotel: Hotel) -> List[DayPlan]:
         start_date = datetime.strptime(request.start_date, "%Y-%m-%d")
-        per_day = {"relaxed": 2, "balanced": 3, "packed": 3}.get(request.pace, 3)
-        unique_attractions: Dict[str, Attraction] = {}
-        for attraction in attractions:
-            key = normalize_place_name(attraction.name)
-            existing = unique_attractions.get(key)
-            if existing is None or attraction.score > existing.score:
-                unique_attractions[key] = attraction
-
-        selected = list(unique_attractions.values())[
-            : max(request.travel_days * per_day, len(request.must_visit))
-        ]
-        base_count, extra_count = divmod(len(selected), request.travel_days)
-        selection_offset = 0
+        if not hasattr(self, "spatial_planner"):
+            self.spatial_planner = SpatialItineraryPlanner()
+        daily_groups = self.spatial_planner.plan(
+            attractions=attractions,
+            travel_days=request.travel_days,
+            pace=request.pace,
+            must_visit=request.must_visit,
+            hotel_location=hotel.location,
+            transportation=request.transportation,
+        )
         days: List[DayPlan] = []
 
         for day_index in range(request.travel_days):
             current_date = start_date + timedelta(days=day_index)
-            day_count = base_count + (1 if day_index < extra_count else 0)
-            day_attractions = selected[selection_offset : selection_offset + day_count]
-            selection_offset += day_count
+            day_attractions = daily_groups[day_index]
             days.append(
                 DayPlan(
                     date=current_date.strftime("%Y-%m-%d"),
@@ -479,6 +537,36 @@ class MultiAgentTripPlanner:
                 )
             )
         return days
+
+    def _update_day_metrics(self, day: DayPlan, pace: str) -> None:
+        profile = get_pace_profile(pace)
+        day.daily_distance_km = round(
+            sum(segment.distance_meters for segment in day.route_segments) / 1000, 2
+        )
+        day.daily_visit_minutes = sum(
+            attraction.visit_duration for attraction in day.attractions
+        )
+        actual_travel_minutes = sum(
+            segment.duration_minutes for segment in day.route_segments
+        )
+        estimated_timing = self.spatial_planner.estimate_day_timing(
+            day.attractions,
+            day.hotel.location if day.hotel else None,
+            day.transportation,
+            profile,
+        )
+        day.daily_travel_minutes = max(
+            actual_travel_minutes, estimated_timing.travel_minutes
+        )
+        day.daily_buffer_minutes = (
+            profile.daily_buffer_minutes if day.attractions else 0
+        )
+        day.daily_duration_minutes = (
+            day.daily_visit_minutes
+            + day.daily_travel_minutes
+            + day.daily_buffer_minutes
+        )
+        day.daily_cost = self._daily_cost(day)
 
     def _build_meals(self, request: TripRequest, day_index: int) -> List[Meal]:
         restriction = f"，注意{';'.join(request.dietary_restrictions)}" if request.dietary_restrictions else ""
@@ -524,7 +612,9 @@ class MultiAgentTripPlanner:
             base += " 规划参考了本地攻略证据，结果页可查看来源片段。"
         return base
 
-    def _rag_query(self, request: TripRequest) -> str:
+    def build_rag_query(self, request: TripRequest) -> str:
+        """Build the retrieval query shared by legacy and Agent workflows."""
+
         return " ".join(
             [
                 request.city,

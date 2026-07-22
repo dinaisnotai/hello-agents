@@ -136,6 +136,10 @@ class DayPlan(BaseModel):
     meals: List[Meal] = Field(default_factory=list)
     route_segments: List[RouteSegment] = Field(default_factory=list)
     daily_distance_km: float = 0
+    daily_visit_minutes: int = 0
+    daily_travel_minutes: int = 0
+    daily_buffer_minutes: int = 0
+    daily_duration_minutes: int = 0
     daily_cost: int = 0
 
 
