@@ -126,5 +126,51 @@ class AmapRouteTest(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_transit_response_preserves_walking_and_subway_segments(self):
+        result = self.service._parse_route(
+            {
+                "route": {
+                    "transits": [
+                        {
+                            "distance": "15856",
+                            "duration": "4620",
+                            "walking_distance": "850",
+                            "segments": [
+                                {
+                                    "walking": {
+                                        "distance": "850",
+                                        "duration": "600",
+                                        "steps": [{"instruction": "步行至西土城站"}],
+                                    },
+                                    "bus": {
+                                        "buslines": [
+                                            {
+                                                "name": "地铁10号线→地铁4号线大兴线",
+                                                "type": "地铁线路",
+                                                "distance": "15006",
+                                                "duration": "3300",
+                                                "departure_stop": {"name": "西土城"},
+                                                "arrival_stop": {"name": "西四"},
+                                            }
+                                        ]
+                                    },
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+            "transit",
+        )
+
+        self.assertEqual(result.route_type, "transit")
+        self.assertEqual(result.duration, 4620)
+        self.assertEqual(result.walking_distance, 850)
+        self.assertEqual(result.walking_duration, 600)
+        self.assertEqual(result.transit_duration, 4020)
+        self.assertEqual([step.mode for step in result.steps], ["walking", "subway"])
+        self.assertIn("地铁10号线", result.description)
+        self.assertIn("步行 10 分钟", result.description)
+
 if __name__ == "__main__":
     unittest.main()

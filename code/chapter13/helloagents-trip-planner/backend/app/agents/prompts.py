@@ -15,6 +15,14 @@ PLANNER_PROMPT = """
 距离和时间必须以确定性规划结果为准。
 攻略结论必须引用输入中的证据。
 
+交通字段解释（必须严格遵守）：
+- `route_type="transit"` 表示公交/地铁，不是步行；
+- `distance_meters` 和 `daily_distance_km` 是该交通方式的线路总里程，不能称为步行距离；
+- 只有 `walking_distance_meters`、`walking_duration_minutes` 和
+  `daily_walking_distance_km` 才能用于描述步行强度；
+- `transit_duration_minutes` 是公交/地铁部分耗时，`steps` 是高德返回的交通分段；
+- 不得因为路线较长或存在接驳步行，就把整段公共交通描述为步行。
+
 你不能修改行程中的景点分组、访问顺序、距离、交通时间、预算和约束报告。
 你只能审查软性合理性并给出解释，例如天气影响、体力负担、预约提醒和体验重复。
 

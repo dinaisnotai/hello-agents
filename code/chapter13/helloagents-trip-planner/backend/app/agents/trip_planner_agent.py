@@ -276,6 +276,18 @@ class RouteEvaluator:
                     route_type=route.route_type,
                     distance_meters=route.distance,
                     duration_minutes=max(1, int(route.duration / 60)),
+                    walking_distance_meters=route.walking_distance,
+                    walking_duration_minutes=(
+                        max(1, round(route.walking_duration / 60))
+                        if route.walking_duration
+                        else 0
+                    ),
+                    transit_duration_minutes=(
+                        max(1, round(route.transit_duration / 60))
+                        if route.transit_duration
+                        else 0
+                    ),
+                    steps=route.steps,
                     description=route.description,
                 )
             )
@@ -319,7 +331,10 @@ class ConstraintChecker:
             )
 
         if request.max_daily_walk_km is not None:
-            max_walk = max((day.daily_distance_km for day in plan.days), default=0)
+            max_walk = max(
+                (day.daily_walking_distance_km for day in plan.days),
+                default=0,
+            )
             passed = max_walk <= request.max_daily_walk_km
             items.append(
                 ConstraintItem(
@@ -542,6 +557,16 @@ class MultiAgentTripPlanner:
         profile = get_pace_profile(pace)
         day.daily_distance_km = round(
             sum(segment.distance_meters for segment in day.route_segments) / 1000, 2
+        )
+        day.daily_walking_distance_km = round(
+            sum(
+                segment.distance_meters
+                if segment.route_type == "walking"
+                else segment.walking_distance_meters
+                for segment in day.route_segments
+            )
+            / 1000,
+            2,
         )
         day.daily_visit_minutes = sum(
             attraction.visit_duration for attraction in day.attractions

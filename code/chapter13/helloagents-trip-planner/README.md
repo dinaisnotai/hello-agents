@@ -57,6 +57,13 @@ npm run dev
 
 - `AMAP_API_KEY`：可选。缺失时使用本地降级数据。
 - `LLM_API_KEY` / `OPENAI_API_KEY`：可选。配置后四个 Agent 使用 LLM；缺失或调用失败时自动降级到确定性流程。
+- `LLM_TIMEOUT`：单次 LLM 网络调用超时秒数，默认 `60`。三个专家 Agent 会并行执行，PlannerAgent 在其后执行。
+- `LLM_MAX_TOOL_ITERATIONS`：专家 Agent 的工具调用轮数，默认 `1`，即最多一次工具决策和一次最终回答；不建议提高。
+- `AGENT_LOG_OUTPUTS`：是否在后端控制台打印每个 Agent 的结构化输出，默认 `true`。
+- `AGENT_LOG_MAX_CHARS`：单个 Agent 输出日志的最大字符数，默认 `50000`，超出时会明确标记截断。
+- `AMAP_LOG_RAW_RESPONSE`：是否打印高德路线接口的原始响应，默认 `false`；仅在排查路线解析时临时开启。
+- `AMAP_LOG_MAX_CHARS`：单次高德原始响应日志的最大字符数，默认 `50000`。
+- `VITE_API_TIMEOUT_MS`：前端规划请求的总等待时间，默认 `300000`（5 分钟）。
 - `VITE_API_BASE_URL`：默认 `http://localhost:8000`。
 
 ## 评测

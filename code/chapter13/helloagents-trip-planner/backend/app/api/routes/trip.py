@@ -1,5 +1,7 @@
 """Trip planning API routes."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
@@ -7,6 +9,7 @@ from ...agents.multi_agent_orchestrator import get_multi_agent_orchestrator
 from ...models.schemas import ReplanRequest, TripPlanResponse, TripRequest
 
 router = APIRouter(prefix="/trip", tags=["Trip Planning"])
+logger = logging.getLogger("uvicorn.error")
 
 
 @router.post(
@@ -20,7 +23,7 @@ async def plan_trip(request: TripRequest):
         trip_plan = await run_in_threadpool(planner.plan_trip, request)
         return TripPlanResponse(success=True, message="旅行计划生成成功", data=trip_plan)
     except Exception as exc:
-        print(f"Trip planning failed: {exc}")
+        logger.exception("Trip planning failed")
         raise HTTPException(status_code=500, detail=f"旅行计划生成失败: {exc}") from exc
 
 
@@ -35,7 +38,7 @@ async def replan_trip(request: ReplanRequest):
         trip_plan = await run_in_threadpool(planner.replan, request)
         return TripPlanResponse(success=True, message="行程已重新计算", data=trip_plan)
     except Exception as exc:
-        print(f"Trip replanning failed: {exc}")
+        logger.exception("Trip replanning failed")
         raise HTTPException(status_code=500, detail=f"重规划失败: {exc}") from exc
 
 

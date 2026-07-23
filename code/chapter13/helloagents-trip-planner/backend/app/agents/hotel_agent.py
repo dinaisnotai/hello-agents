@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from threading import Lock
 from typing import Optional
 
 from hello_agents import HelloAgentsLLM, SimpleAgent, ToolRegistry
@@ -10,7 +11,11 @@ from hello_agents import HelloAgentsLLM, SimpleAgent, ToolRegistry
 from ..models.agent_outputs import HotelSearchResult
 from ..models.schemas import TripRequest
 from ..tools.amap_tools import HotelSearchTool
-from .agent_utils import parse_agent_result
+from .agent_utils import (
+    parse_agent_result,
+    run_stateless_agent,
+    specialist_max_tool_iterations,
+)
 from .prompts import HOTEL_SEARCH_PROMPT
 
 
@@ -21,6 +26,7 @@ class HotelAgent:
         search_tool: HotelSearchTool,
     ):
         self.search_tool = search_tool
+        self._run_lock = Lock()
         self.agent: Optional[SimpleAgent] = None
         if llm is not None:
             registry = ToolRegistry()
@@ -43,7 +49,12 @@ class HotelAgent:
         }
         if self.agent is not None:
             try:
-                raw_result = self.agent.run(json.dumps(agent_input, ensure_ascii=False))
+                with self._run_lock:
+                    raw_result = run_stateless_agent(
+                        self.agent,
+                        json.dumps(agent_input, ensure_ascii=False),
+                        max_tool_iterations=specialist_max_tool_iterations(),
+                    )
                 result = parse_agent_result(raw_result, HotelSearchResult)
                 if not result.candidates:
                     raise ValueError("酒店 Agent 没有返回候选酒店")

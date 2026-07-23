@@ -82,7 +82,8 @@
             <a-descriptions :column="2" size="small" bordered>
               <a-descriptions-item label="交通">{{ day.transportation }}</a-descriptions-item>
               <a-descriptions-item label="住宿">{{ day.hotel?.name || day.accommodation }}</a-descriptions-item>
-              <a-descriptions-item label="当日距离">{{ day.daily_distance_km || 0 }} km</a-descriptions-item>
+              <a-descriptions-item label="交通总里程">{{ day.daily_distance_km || 0 }} km</a-descriptions-item>
+              <a-descriptions-item label="其中步行">{{ day.daily_walking_distance_km || 0 }} km</a-descriptions-item>
               <a-descriptions-item label="游览时间">{{ formatMinutes(day.daily_visit_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="交通时间">{{ formatMinutes(day.daily_travel_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="餐饮及缓冲">{{ formatMinutes(day.daily_buffer_minutes) }}</a-descriptions-item>
@@ -107,8 +108,22 @@
             <a-timeline>
               <a-timeline-item v-for="segment in day.route_segments" :key="`${segment.origin}-${segment.destination}`">
                 {{ segment.origin }} → {{ segment.destination }}，
+                {{ routeTypeLabel(segment.route_type) }}，
                 {{ (segment.distance_meters / 1000).toFixed(1) }} km，
-                {{ segment.duration_minutes }} 分钟
+                共 {{ segment.duration_minutes }} 分钟
+                <template v-if="segment.route_type === 'transit'">
+                  （公交/地铁 {{ segment.transit_duration_minutes || 0 }} 分钟，
+                  步行 {{ segment.walking_duration_minutes || 0 }} 分钟 / {{ ((segment.walking_distance_meters || 0) / 1000).toFixed(1) }} km）
+                </template>
+                <div v-if="segment.description" class="route-description">{{ segment.description }}</div>
+                <ul v-if="segment.steps?.length" class="route-steps">
+                  <li v-for="(step, stepIndex) in segment.steps" :key="stepIndex">
+                    {{ routeTypeLabel(step.mode) }}
+                    <template v-if="step.name"> · {{ step.name }}</template>
+                    <template v-if="step.origin || step.destination"> · {{ step.origin }} → {{ step.destination }}</template>
+                    · {{ step.duration_minutes }} 分钟
+                  </li>
+                </ul>
               </a-timeline-item>
             </a-timeline>
           </a-collapse-panel>
@@ -137,6 +152,15 @@ import { replanTrip } from '@/services/api'
 import type { DayPlan, TripFormData, TripPlan } from '@/types'
 
 const router = useRouter()
+
+const routeTypeLabel = (type: string) => ({
+  walking: '步行',
+  transit: '公共交通',
+  subway: '地铁',
+  bus: '公交',
+  railway: '铁路',
+  driving: '驾车',
+} as Record<string, string>)[type] || type
 const tripPlan = ref<TripPlan | null>(null)
 const tripRequest = ref<TripFormData | undefined>()
 const activeDays = ref<number[]>([0])

@@ -53,8 +53,10 @@ class _FakeAmapService:
 class _StubAgent:
     def __init__(self, payload):
         self.payload = payload
+        self.kwargs = {}
 
-    def run(self, input_text):
+    def run(self, input_text, **kwargs):
+        self.kwargs = kwargs
         return self.payload
 
 
@@ -121,6 +123,7 @@ class SpecialistAgentsTest(unittest.TestCase):
 
         self.assertFalse(result.used_fallback)
         self.assertEqual(result.attractions[0].name, "故宫博物院")
+        self.assertEqual(agent.agent.kwargs["max_tool_iterations"], 1)
 
     def test_attraction_agent_reuses_poi_collector_as_fallback(self):
         amap = _FakeAmapService()

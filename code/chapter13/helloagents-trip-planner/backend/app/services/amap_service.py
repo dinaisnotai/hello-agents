@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,10 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from ..config import get_settings
-from ..models.schemas import Location, POIInfo, RouteInfo, WeatherInfo
+from ..models.schemas import Location, POIInfo, RouteInfo, RouteStep, WeatherInfo
 from .place_name_service import normalize_place_name, place_names_match
 
 AMAP_API_BASE_URL = "https://restapi.amap.com/v3"
+logger = logging.getLogger("uvicorn.error")
 
 
 class TTLCache:
@@ -257,7 +260,33 @@ class AmapService:
             params["cityd"] = destination_city or origin_city or ""
 
         data = self._request(endpoint_map[normalized_type], params)
+        self._log_raw_route_response(normalized_type, params, data)
         return self._parse_route(data, normalized_type)
+
+    def _log_raw_route_response(
+        self,
+        route_type: str,
+        params: Dict[str, Any],
+        data: Dict[str, Any],
+    ) -> None:
+        enabled = os.getenv("AMAP_LOG_RAW_RESPONSE", "false").strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return
+        text = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+        try:
+            max_chars = max(1000, int(os.getenv("AMAP_LOG_MAX_CHARS", "50000")))
+        except ValueError:
+            max_chars = 50000
+        if len(text) > max_chars:
+            omitted = len(text) - max_chars
+            text = f"{text[:max_chars]}\n... [高德响应已截断，省略 {omitted} 个字符]"
+        logger.info(
+            "[amap-route] RAW RESPONSE route_type=%s origin=%s destination=%s\n%s",
+            route_type,
+            params.get("origin", ""),
+            params.get("destination", ""),
+            text,
+        )
 
     def _parse_pois(self, raw: str, keywords: str, city: str) -> List[POIInfo]:
         data = self._extract_json(raw)
@@ -326,7 +355,7 @@ class AmapService:
             )
         return weather
 
-    def _parse_route(self, raw: str, route_type: str) -> RouteInfo:
+    def _parse_route(self, raw: Any, route_type: str) -> RouteInfo:
         data = self._extract_json(raw)
         if not isinstance(data, dict):
             return RouteInfo(route_type=route_type, description=raw[:200])
@@ -336,8 +365,107 @@ class AmapService:
         first = paths[0] if paths and isinstance(paths[0], dict) else route
         distance = self._safe_float(first.get("distance") or route.get("distance")) or 0
         duration = int(self._safe_float(first.get("duration") or route.get("duration")) or 0)
+        if route_type == "transit":
+            return self._parse_transit_route(first, distance, duration)
         description = first.get("instruction") or first.get("strategy") or "Amap route parsed successfully"
         return RouteInfo(distance=distance, duration=duration, route_type=route_type, description=str(description))
+
+    def _parse_transit_route(
+        self,
+        transit: Dict[str, Any],
+        distance: float,
+        duration: int,
+    ) -> RouteInfo:
+        """Preserve Amap transit/walking legs instead of flattening them."""
+
+        steps: List[RouteStep] = []
+        walking_distance = self._safe_float(transit.get("walking_distance")) or 0
+        walking_duration = 0
+
+        for segment in transit.get("segments") or []:
+            if not isinstance(segment, dict):
+                continue
+
+            walking = segment.get("walking")
+            if isinstance(walking, dict):
+                leg_distance = self._safe_float(walking.get("distance")) or 0
+                leg_duration = int(self._safe_float(walking.get("duration")) or 0)
+                walking_duration += leg_duration
+                instructions = [
+                    str(item.get("instruction"))
+                    for item in walking.get("steps") or []
+                    if isinstance(item, dict) and item.get("instruction")
+                ]
+                if leg_distance > 0 or leg_duration > 0:
+                    steps.append(
+                        RouteStep(
+                            mode="walking",
+                            distance_meters=leg_distance,
+                            duration_minutes=max(1, round(leg_duration / 60)) if leg_duration else 0,
+                            instruction="；".join(instructions),
+                        )
+                    )
+
+            bus = segment.get("bus")
+            buslines = bus.get("buslines") if isinstance(bus, dict) else []
+            busline = buslines[0] if buslines and isinstance(buslines[0], dict) else None
+            if busline:
+                name = str(busline.get("name") or "公交/地铁")
+                line_type = str(busline.get("type") or "")
+                mode = "subway" if "地铁" in f"{name}{line_type}" else "bus"
+                leg_duration = int(self._safe_float(busline.get("duration")) or 0)
+                departure = busline.get("departure_stop") or {}
+                arrival = busline.get("arrival_stop") or {}
+                steps.append(
+                    RouteStep(
+                        mode=mode,
+                        name=name,
+                        origin=str(departure.get("name") or "") if isinstance(departure, dict) else "",
+                        destination=str(arrival.get("name") or "") if isinstance(arrival, dict) else "",
+                        distance_meters=self._safe_float(busline.get("distance")) or 0,
+                        duration_minutes=max(1, round(leg_duration / 60)) if leg_duration else 0,
+                        instruction=f"乘坐{name}",
+                    )
+                )
+
+            railway = segment.get("railway")
+            if isinstance(railway, dict) and railway:
+                leg_duration = int(self._safe_float(railway.get("time") or railway.get("duration")) or 0)
+                steps.append(
+                    RouteStep(
+                        mode="railway",
+                        name=str(railway.get("name") or railway.get("trip") or "铁路"),
+                        distance_meters=self._safe_float(railway.get("distance")) or 0,
+                        duration_minutes=max(1, round(leg_duration / 60)) if leg_duration else 0,
+                        instruction="乘坐铁路",
+                    )
+                )
+
+        if walking_distance <= 0:
+            walking_distance = sum(step.distance_meters for step in steps if step.mode == "walking")
+        transit_duration = max(0, duration - walking_duration)
+        transit_names = list(
+            dict.fromkeys(step.name for step in steps if step.mode != "walking" and step.name)
+        )
+        detail = f"公共交通 {max(1, round(duration / 60))} 分钟"
+        detail += (
+            f"（步行 {round(walking_duration / 60)} 分钟，"
+            f"公交/地铁 {round(transit_duration / 60)} 分钟）"
+        )
+        detail += f"；步行 {walking_distance / 1000:.1f} km"
+        if transit_names:
+            detail += f"；线路：{' → '.join(transit_names)}"
+
+        return RouteInfo(
+            distance=distance,
+            duration=duration,
+            route_type="transit",
+            walking_distance=walking_distance,
+            walking_duration=walking_duration,
+            transit_duration=transit_duration,
+            steps=steps,
+            description=detail,
+        )
 
     def _parse_location(self, raw: str) -> Optional[Location]:
         data = self._extract_json(raw)

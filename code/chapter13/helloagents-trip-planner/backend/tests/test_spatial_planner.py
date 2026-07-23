@@ -221,6 +221,8 @@ class SpatialItineraryPlannerTest(unittest.TestCase):
             [("测试酒店", "测试景点"), ("测试景点", "测试酒店")],
         )
         self.assertGreater(day.daily_travel_minutes, 0)
+        self.assertGreater(day.daily_distance_km, 0)
+        self.assertEqual(day.daily_walking_distance_km, 0)
         self.assertEqual(day.daily_buffer_minutes, 60)
         self.assertEqual(
             day.daily_duration_minutes,

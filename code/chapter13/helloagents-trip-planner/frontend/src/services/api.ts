@@ -2,10 +2,14 @@ import axios from 'axios'
 import type { ReplanRequest, TripFormData, TripPlanResponse } from '@/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const configuredTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS || 300000)
+const API_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+  ? configuredTimeout
+  : 300000
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 120000, // 2分钟超时
+  timeout: API_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -30,7 +34,10 @@ apiClient.interceptors.response.use(
     return response
   },
   (error) => {
-    console.error('响应错误:', error.response?.status, error.message)
+    console.error('响应错误:', error.response?.status, error.message, {
+      code: error.code,
+      timeoutMs: error.config?.timeout
+    })
     return Promise.reject(error)
   }
 )
@@ -44,6 +51,9 @@ export async function generateTripPlan(formData: TripFormData): Promise<TripPlan
     return response.data
   } catch (error: any) {
     console.error('生成旅行计划失败:', error)
+    if (error.code === 'ECONNABORTED') {
+      throw new Error(`生成旅行计划超过 ${Math.round(API_TIMEOUT_MS / 1000)} 秒，请查看后端各 Agent 耗时日志`)
+    }
     throw new Error(error.response?.data?.detail || error.message || '生成旅行计划失败')
   }
 }

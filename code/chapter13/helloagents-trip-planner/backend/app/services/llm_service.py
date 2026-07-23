@@ -26,6 +26,7 @@ def get_llm() -> HelloAgentsLLM:
         print(f"✅ LLM服务初始化成功")
         print(f"   提供商: {_llm_instance.provider}")
         print(f"   模型: {_llm_instance.model}")
+        print(f"   单次调用超时: {_llm_instance.timeout} 秒")
     
     return _llm_instance
 

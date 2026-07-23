@@ -38,6 +38,16 @@ export interface Hotel {
   estimated_cost?: number
 }
 
+export interface RouteStep {
+  mode: string
+  name: string
+  origin: string
+  destination: string
+  distance_meters: number
+  duration_minutes: number
+  instruction: string
+}
+
 export interface RouteSegment {
   day_index: number
   origin: string
@@ -45,6 +55,10 @@ export interface RouteSegment {
   route_type: string
   distance_meters: number
   duration_minutes: number
+  walking_distance_meters: number
+  walking_duration_minutes: number
+  transit_duration_minutes: number
+  steps: RouteStep[]
   description: string
 }
 
@@ -92,6 +106,7 @@ export interface DayPlan {
   meals: Meal[]
   route_segments?: RouteSegment[]
   daily_distance_km?: number
+  daily_walking_distance_km?: number
   daily_visit_minutes?: number
   daily_travel_minutes?: number
   daily_buffer_minutes?: number

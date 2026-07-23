@@ -115,6 +115,16 @@ class Hotel(BaseModel):
     estimated_cost: int = Field(default=0, ge=0)
 
 
+class RouteStep(BaseModel):
+    mode: str = Field(description="walking/bus/subway/railway/driving")
+    name: str = ""
+    origin: str = ""
+    destination: str = ""
+    distance_meters: float = 0
+    duration_minutes: int = 0
+    instruction: str = ""
+
+
 class RouteSegment(BaseModel):
     day_index: int
     origin: str
@@ -122,6 +132,10 @@ class RouteSegment(BaseModel):
     route_type: str = "walking"
     distance_meters: float = 0
     duration_minutes: int = 0
+    walking_distance_meters: float = 0
+    walking_duration_minutes: int = 0
+    transit_duration_minutes: int = 0
+    steps: List[RouteStep] = Field(default_factory=list)
     description: str = ""
 
 
@@ -136,6 +150,7 @@ class DayPlan(BaseModel):
     meals: List[Meal] = Field(default_factory=list)
     route_segments: List[RouteSegment] = Field(default_factory=list)
     daily_distance_km: float = 0
+    daily_walking_distance_km: float = 0
     daily_visit_minutes: int = 0
     daily_travel_minutes: int = 0
     daily_buffer_minutes: int = 0
@@ -244,6 +259,10 @@ class RouteInfo(BaseModel):
     distance: float = Field(default=0, description="Distance in meters")
     duration: int = Field(default=0, description="Duration in seconds")
     route_type: str = "walking"
+    walking_distance: float = Field(default=0, description="Walking distance in meters")
+    walking_duration: int = Field(default=0, description="Walking duration in seconds")
+    transit_duration: int = Field(default=0, description="Non-walking transit duration in seconds")
+    steps: List[RouteStep] = Field(default_factory=list)
     description: str = ""
 
 

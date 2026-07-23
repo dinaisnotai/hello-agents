@@ -1,4 +1,5 @@
 import unittest
+from threading import Barrier
 
 from app.agents.multi_agent_orchestrator import MultiAgentOrchestrator
 from app.models.agent_outputs import (
@@ -30,6 +31,16 @@ class _Specialist:
     def run(self, request):
         self.calls += 1
         return self.result
+
+
+class _BarrierSpecialist(_Specialist):
+    def __init__(self, result, barrier):
+        super().__init__(result)
+        self.barrier = barrier
+
+    def run(self, request):
+        self.barrier.wait(timeout=2)
+        return super().run(request)
 
 
 class _Planner:
@@ -93,6 +104,28 @@ class MultiAgentOrchestratorTest(unittest.TestCase):
                 "PlannerAgent": "llm",
             },
         )
+
+    def test_runs_three_specialists_concurrently(self):
+        barrier = Barrier(3)
+        orchestrator = MultiAgentOrchestrator.__new__(MultiAgentOrchestrator)
+        orchestrator.initialization_warning = ""
+        orchestrator.last_run_status = {}
+        orchestrator.plan_builder = _PlanBuilder()
+        orchestrator.attraction_agent = _BarrierSpecialist(
+            AttractionSearchResult(), barrier
+        )
+        orchestrator.weather_agent = _BarrierSpecialist(
+            WeatherQueryResult(), barrier
+        )
+        orchestrator.hotel_agent = _BarrierSpecialist(
+            HotelSearchResult(candidates=[Hotel(name="测试酒店")]), barrier
+        )
+        orchestrator.planner_agent = _Planner()
+
+        plan = orchestrator.plan_trip(_request())
+
+        self.assertEqual(plan.overall_suggestions, "四 Agent 编排成功")
+        self.assertEqual(barrier.n_waiting, 0)
 
     def test_health_lists_the_four_real_agent_roles(self):
         orchestrator = MultiAgentOrchestrator.__new__(MultiAgentOrchestrator)
