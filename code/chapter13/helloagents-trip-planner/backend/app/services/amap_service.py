@@ -14,6 +14,7 @@ import httpx
 
 from ..config import get_settings
 from ..models.schemas import Location, POIInfo, RouteInfo, RouteStep, WeatherInfo
+from .city_name_service import normalize_city_name
 from .place_name_service import normalize_place_name, place_names_match
 
 AMAP_API_BASE_URL = "https://restapi.amap.com/v3"
@@ -50,6 +51,7 @@ class AmapService:
         self.settings = get_settings()
 
     def search_poi(self, keywords: str, city: str, citylimit: bool = True) -> List[POIInfo]:
+        city = normalize_city_name(city)
         cache_key = f"poi:{city}:{keywords}:{citylimit}"
         cached = self.cache.get(cache_key)
         if cached is not None:
@@ -82,6 +84,7 @@ class AmapService:
         return pois
 
     def get_weather(self, city: str) -> List[WeatherInfo]:
+        city = normalize_city_name(city)
         cache_key = f"weather:{city}"
         cached = self.cache.get(cache_key)
         if cached is not None:

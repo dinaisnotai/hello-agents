@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4"
 
+    # Embedding / vector retrieval configuration. These may point at any
+    # OpenAI-compatible embedding endpoint.
+    embedding_api_key: str = ""
+    embedding_base_url: str = ""
+    embedding_model: str = "text-embedding-3-small"
+
     # 日志配置
     log_level: str = "INFO"
 

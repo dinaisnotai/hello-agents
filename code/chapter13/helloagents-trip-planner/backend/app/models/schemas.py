@@ -6,6 +6,8 @@ from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..services.city_name_service import normalize_city_name
+
 
 AvoidCategory = Literal[
     "park",
@@ -38,6 +40,11 @@ class TripRequest(BaseModel):
     dietary_restrictions: List[str] = Field(default_factory=list, description="Dietary restrictions")
     max_daily_walk_km: Optional[float] = Field(default=None, ge=0, description="Max daily walking distance")
     hotel_area: Optional[str] = Field(default="", description="Preferred hotel area")
+
+    @field_validator("city", mode="before")
+    @classmethod
+    def normalize_city(cls, value: object) -> str:
+        return normalize_city_name(str(value or ""))
 
     class Config:
         json_schema_extra = {
