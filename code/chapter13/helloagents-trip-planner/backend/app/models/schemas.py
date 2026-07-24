@@ -212,6 +212,17 @@ class EvidenceSource(BaseModel):
     score: float = 0
 
 
+class PlanningTraceItem(BaseModel):
+    """One observable decision made during constraint-driven planning."""
+
+    iteration: int = Field(ge=0, description="Zero-based planning iteration")
+    role: str = Field(description="The component that made the observation or decision")
+    action: str = Field(description="Observed check or repair action")
+    reason: str = Field(description="Why this action was taken")
+    score_before: float = Field(ge=0, le=1, description="Constraint score before the action")
+    score_after: float = Field(ge=0, le=1, description="Constraint score after the action")
+
+
 class TripPlan(BaseModel):
     city: str
     start_date: str
@@ -224,6 +235,8 @@ class TripPlan(BaseModel):
     constraint_report: ConstraintReport = Field(default_factory=ConstraintReport)
     risk_warnings: List[str] = Field(default_factory=list)
     evidence_sources: List[EvidenceSource] = Field(default_factory=list)
+    planning_trace: List[PlanningTraceItem] = Field(default_factory=list)
+    failure_reason: Optional[str] = None
 
 
 class TripPlanResponse(BaseModel):

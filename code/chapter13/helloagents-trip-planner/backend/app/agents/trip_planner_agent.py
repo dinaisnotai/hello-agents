@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Optional, Set
@@ -16,6 +17,7 @@ from ..models.schemas import (
     Hotel,
     Meal,
     POIInfo,
+    PlanningTraceItem,
     ReplanRequest,
     RouteSegment,
     TripPlan,
@@ -383,14 +385,26 @@ class ConstraintChecker:
             )
 
         if request.dietary_restrictions:
+            meals = [meal for day in plan.days for meal in day.meals]
+            passed = bool(meals) and all(
+                all(
+                    restriction in f"{meal.name} {meal.description or ''}"
+                    for restriction in request.dietary_restrictions
+                )
+                for meal in meals
+            )
             items.append(
                 ConstraintItem(
                     name="饮食限制",
-                    passed=True,
+                    passed=passed,
                     actual="; ".join(request.dietary_restrictions),
                     expected="餐饮描述中规避相关限制",
-                    severity="info",
-                    message="餐饮推荐已标记饮食限制，实际点餐前仍建议二次确认",
+                    severity="info" if passed else "blocker",
+                    message=(
+                        "餐饮推荐已明确标记饮食限制"
+                        if passed
+                        else "至少一餐缺少明确的饮食限制标记"
+                    ),
                 )
             )
 
@@ -419,7 +433,7 @@ class ConstraintChecker:
 
         passed_count = sum(1 for item in items if item.passed)
         return ConstraintReport(
-            passed=all(item.passed for item in items if item.severity == "blocker"),
+            passed=all(item.passed for item in items),
             score=round(passed_count / len(items), 3),
             items=items,
         )
@@ -445,6 +459,8 @@ class PlannerReviewer:
 
 class MultiAgentTripPlanner:
     """Coordinates deterministic planner roles and optional local RAG evidence."""
+
+    max_planning_iterations = 5
 
     def __init__(self):
         self.amap_service = get_amap_service()
@@ -481,12 +497,6 @@ class MultiAgentTripPlanner:
         """Build a plan from specialist outputs without searching again."""
 
         days = self._assign_days(request, attractions, hotel)
-        for day in days:
-            day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
-            self._update_day_metrics(day, request.pace)
-
-        route_segments = [segment for day in days for segment in day.route_segments]
-        budget = self.budget_estimator.estimate(days, request)
         plan = TripPlan(
             city=request.city,
             start_date=request.start_date,
@@ -494,12 +504,10 @@ class MultiAgentTripPlanner:
             days=days,
             weather_info=weather,
             overall_suggestions=self._build_suggestions(request, evidence),
-            budget=budget,
-            route_segments=route_segments,
             evidence_sources=evidence,
             risk_warnings=[],
         )
-        plan.constraint_report = self.constraint_checker.check(plan, request)
+        plan = self._repair_until_stable(plan, request, attractions)
         return self.reviewer.review(plan, request)
 
     def replan(self, replan_request: ReplanRequest) -> TripPlan:
@@ -512,15 +520,189 @@ class MultiAgentTripPlanner:
             transportation=plan.days[0].transportation if plan.days else "公共交通",
             accommodation=plan.days[0].accommodation if plan.days else "经济型酒店",
         )
+        self._recalculate(plan, request)
+        if replan_request.notes:
+            plan.risk_warnings.append(f"重规划备注：{replan_request.notes}")
+        return self.reviewer.review(plan, request)
+
+    def _repair_until_stable(
+        self,
+        plan: TripPlan,
+        request: TripRequest,
+        available_attractions: List[Attraction],
+    ) -> TripPlan:
+        """Bound constraint repairs and keep the best plan seen so far."""
+
+        best_plan: Optional[TripPlan] = None
+        best_rank: Optional[tuple] = None
+
+        for iteration in range(self.max_planning_iterations):
+            self._recalculate(plan, request)
+            report = plan.constraint_report
+            score = report.score
+            plan.planning_trace.append(
+                PlanningTraceItem(
+                    iteration=iteration,
+                    role="ConstraintChecker",
+                    action="check_constraints",
+                    reason=self._report_summary(report),
+                    score_before=score,
+                    score_after=score,
+                )
+            )
+            rank = self._plan_rank(plan, request)
+            if best_rank is None or rank > best_rank:
+                best_plan, best_rank = deepcopy(plan), rank
+
+            if report.passed:
+                plan.failure_reason = None
+                return plan
+
+            score_before = score
+            action = self._apply_next_repair(plan, request, available_attractions)
+            if action is None:
+                break
+
+            self._recalculate(plan, request)
+            plan.planning_trace.append(
+                PlanningTraceItem(
+                    iteration=iteration,
+                    role="RepairPolicy",
+                    action=action[0],
+                    reason=action[1],
+                    score_before=score_before,
+                    score_after=plan.constraint_report.score,
+                )
+            )
+            repaired_rank = self._plan_rank(plan, request)
+            if best_rank is None or repaired_rank > best_rank:
+                best_plan, best_rank = deepcopy(plan), repaired_rank
+            if plan.constraint_report.passed:
+                plan.failure_reason = None
+                return plan
+
+        result = best_plan or plan
+        self._recalculate(result, request)
+        result.failure_reason = self._failure_reason(result.constraint_report)
+        return result
+
+    def _recalculate(self, plan: TripPlan, request: TripRequest) -> None:
         for day in plan.days:
             day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
             self._update_day_metrics(day, request.pace)
         plan.route_segments = [segment for day in plan.days for segment in day.route_segments]
         plan.budget = self.budget_estimator.estimate(plan.days, request)
         plan.constraint_report = self.constraint_checker.check(plan, request)
-        if replan_request.notes:
-            plan.risk_warnings.append(f"重规划备注：{replan_request.notes}")
-        return self.reviewer.review(plan, request)
+
+    def _apply_next_repair(
+        self,
+        plan: TripPlan,
+        request: TripRequest,
+        available_attractions: List[Attraction],
+    ) -> Optional[tuple[str, str]]:
+        planned_names = [item.name for day in plan.days for item in day.attractions]
+        missing = [
+            name
+            for name in request.must_visit
+            if not any(place_names_match(name, planned) for planned in planned_names)
+        ]
+        if missing:
+            candidate = next(
+                (
+                    item
+                    for item in available_attractions
+                    if place_names_match(missing[0], item.name)
+                ),
+                None,
+            )
+            if candidate is None or not plan.days:
+                return None
+            target_day = min(plan.days, key=lambda day: (len(day.attractions), day.day_index))
+            target_day.attractions.append(deepcopy(candidate))
+            target_day.attractions = self.spatial_planner._nearest_neighbor_order(
+                target_day.attractions,
+                request.must_visit,
+                target_day.hotel.location if target_day.hotel else None,
+            )
+            return (
+                "add_missing_must_visit",
+                f"Added required attraction: {candidate.name}",
+            )
+
+        if request.budget_limit is not None and plan.budget and plan.budget.total > request.budget_limit:
+            optional = [
+                (day, attraction)
+                for day in plan.days
+                for attraction in day.attractions
+                if not any(place_names_match(name, attraction.name) for name in request.must_visit)
+            ]
+            if optional:
+                day, attraction = min(
+                    optional,
+                    key=lambda item: (item[1].score, -item[1].ticket_price, item[1].name),
+                )
+                day.attractions.remove(attraction)
+                return (
+                    "remove_low_priority_attraction",
+                    f"Budget exceeds the limit; removed optional attraction {attraction.name}",
+                )
+
+            hotel = next((day.hotel for day in plan.days if day.hotel), None)
+            if hotel and hotel.estimated_cost > 200:
+                old_cost = hotel.estimated_cost
+                hotel.estimated_cost = 350 if old_cost > 350 else 200
+                return (
+                    "downgrade_hotel",
+                    f"Budget exceeds the limit; reduced nightly hotel estimate from {old_cost} to {hotel.estimated_cost}",
+                )
+
+            meals = [meal for day in plan.days for meal in day.meals if meal.estimated_cost > 20]
+            if meals:
+                for meal in meals:
+                    meal.estimated_cost = max(20, round(meal.estimated_cost * 0.8))
+                return (
+                    "reduce_adjustable_meal_costs",
+                    "Budget exceeds the limit; reduced adjustable meal estimates",
+                )
+
+        if request.max_daily_walk_km is not None:
+            over_limit_days = [
+                day for day in plan.days if day.daily_walking_distance_km > request.max_daily_walk_km
+            ]
+            if over_limit_days:
+                day = max(over_limit_days, key=lambda item: item.daily_walking_distance_km)
+                if day.transportation != "公共交通":
+                    day.transportation = "公共交通"
+                    return (
+                        "switch_to_transit",
+                        f"Walking exceeds the daily limit on day {day.day_index + 1}; switched to public transit",
+                    )
+
+        return None
+
+    def _plan_rank(self, plan: TripPlan, request: TripRequest) -> tuple:
+        failed_count = sum(not item.passed for item in plan.constraint_report.items)
+        budget_overrun = max(0, -(plan.budget.remaining or 0)) if plan.budget else 0
+        max_walk_overrun = (
+            max(
+                (
+                    max(0, day.daily_walking_distance_km - request.max_daily_walk_km)
+                    for day in plan.days
+                ),
+                default=0,
+            )
+            if request.max_daily_walk_km is not None
+            else 0
+        )
+        return (-failed_count, plan.constraint_report.score, -budget_overrun, -max_walk_overrun)
+
+    def _report_summary(self, report: ConstraintReport) -> str:
+        failures = [item.message or item.name for item in report.items if not item.passed]
+        return "; ".join(failures) if failures else "All constraints passed"
+
+    def _failure_reason(self, report: ConstraintReport) -> str:
+        failures = [item.message or item.name for item in report.items if not item.passed]
+        return "; ".join(failures) or "Planning stopped before all constraints could be satisfied"
 
     def _assign_days(self, request: TripRequest, attractions: List[Attraction], hotel: Hotel) -> List[DayPlan]:
         start_date = datetime.strptime(request.start_date, "%Y-%m-%d")

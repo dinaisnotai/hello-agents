@@ -95,6 +95,15 @@ export interface EvidenceSource {
   score: number
 }
 
+export interface PlanningTraceItem {
+  iteration: number
+  role: string
+  action: string
+  reason: string
+  score_before: number
+  score_after: number
+}
+
 export interface DayPlan {
   date: string
   day_index: number
@@ -136,6 +145,8 @@ export interface TripPlan {
   constraint_report: ConstraintReport
   risk_warnings: string[]
   evidence_sources: EvidenceSource[]
+  planning_trace: PlanningTraceItem[]
+  failure_reason?: string
 }
 
 export type AvoidCategory =

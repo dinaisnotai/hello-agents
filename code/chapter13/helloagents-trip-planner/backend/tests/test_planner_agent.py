@@ -7,7 +7,19 @@ from app.models.agent_outputs import (
     HotelSearchResult,
     WeatherQueryResult,
 )
-from app.models.schemas import EvidenceSource, Hotel, TripPlan, TripRequest, WeatherInfo
+from app.agents.trip_planner_agent import BudgetEstimator, ConstraintChecker, MultiAgentTripPlanner
+from app.models.schemas import (
+    Attraction,
+    DayPlan,
+    EvidenceSource,
+    Hotel,
+    Location,
+    PlanningTraceItem,
+    TripPlan,
+    TripRequest,
+    WeatherInfo,
+)
+from app.services.spatial_planner import SpatialItineraryPlanner
 
 
 class _StubPlanBuilder:
@@ -43,6 +55,42 @@ class _StubAgent:
         return self.response
 
 
+class _NoRouteEvaluator:
+    def build_day_routes(self, day, city):
+        return []
+
+
+def _repair_planner():
+    planner = MultiAgentTripPlanner.__new__(MultiAgentTripPlanner)
+    planner.max_planning_iterations = 5
+    planner.route_evaluator = _NoRouteEvaluator()
+    planner.spatial_planner = SpatialItineraryPlanner()
+    planner.budget_estimator = BudgetEstimator()
+    planner.constraint_checker = ConstraintChecker()
+    return planner
+
+
+def _repair_plan(*, attractions=None):
+    return TripPlan(
+        city="北京",
+        start_date="2026-08-01",
+        end_date="2026-08-01",
+        overall_suggestions="test",
+        days=[
+            DayPlan(
+                date="2026-08-01",
+                day_index=0,
+                description="test",
+                transportation="公共交通",
+                accommodation="经济型酒店",
+                hotel=Hotel(name="test hotel", estimated_cost=0),
+                attractions=attractions or [],
+                meals=[],
+            )
+        ],
+    )
+
+
 def _request():
     return TripRequest(
         city="北京",
@@ -76,6 +124,94 @@ def _inputs():
 
 
 class PlannerAgentTest(unittest.TestCase):
+    def test_repair_loop_removes_low_priority_attraction_and_records_trace(self):
+        attraction = Attraction(
+            name="可选景点",
+            location=Location(longitude=116.4, latitude=39.9),
+            ticket_price=200,
+            score=10,
+        )
+        request = TripRequest(
+            city="北京",
+            start_date="2026-08-01",
+            end_date="2026-08-01",
+            travel_days=1,
+            transportation="公共交通",
+            accommodation="经济型酒店",
+            budget_limit=50,
+        )
+
+        result = _repair_planner()._repair_until_stable(
+            _repair_plan(attractions=[attraction]), request, [attraction]
+        )
+
+        self.assertTrue(result.constraint_report.passed)
+        self.assertEqual(result.days[0].attractions, [])
+        self.assertIsNone(result.failure_reason)
+        self.assertIn(
+            "remove_low_priority_attraction",
+            [item.action for item in result.planning_trace],
+        )
+
+    def test_repair_loop_returns_failure_reason_when_missing_must_visit_cannot_be_found(self):
+        request = TripRequest(
+            city="北京",
+            start_date="2026-08-01",
+            end_date="2026-08-01",
+            travel_days=1,
+            transportation="公共交通",
+            accommodation="经济型酒店",
+            must_visit=["不存在的景点"],
+        )
+
+        result = _repair_planner()._repair_until_stable(_repair_plan(), request, [])
+
+        self.assertFalse(result.constraint_report.passed)
+        self.assertTrue(result.failure_reason)
+        self.assertEqual(result.planning_trace[0].role, "ConstraintChecker")
+
+    def test_dietary_constraint_requires_explicit_meal_markers(self):
+        request = TripRequest(
+            city="北京",
+            start_date="2026-08-01",
+            end_date="2026-08-01",
+            travel_days=1,
+            transportation="公共交通",
+            accommodation="经济型酒店",
+            dietary_restrictions=["不吃海鲜"],
+        )
+
+        report = ConstraintChecker().check(_repair_plan(), request)
+
+        dietary_item = next(item for item in report.items if item.name == "饮食限制")
+        self.assertFalse(dietary_item.passed)
+        self.assertFalse(report.passed)
+
+    def test_trip_plan_serializes_planning_trace_and_failure_reason(self):
+        plan = TripPlan(
+            city="北京",
+            start_date="2026-08-01",
+            end_date="2026-08-01",
+            days=[],
+            overall_suggestions="无法满足全部约束",
+            planning_trace=[
+                PlanningTraceItem(
+                    iteration=0,
+                    role="ConstraintChecker",
+                    action="check_budget",
+                    reason="预算超限",
+                    score_before=0.7,
+                    score_after=0.7,
+                )
+            ],
+            failure_reason="预算仍超限",
+        )
+
+        payload = plan.model_dump(mode="json")
+
+        self.assertEqual(payload["planning_trace"][0]["action"], "check_budget")
+        self.assertEqual(payload["failure_reason"], "预算仍超限")
+
     def test_without_llm_returns_complete_deterministic_plan(self):
         builder = _StubPlanBuilder()
         planner = PlannerAgent(None, builder)
