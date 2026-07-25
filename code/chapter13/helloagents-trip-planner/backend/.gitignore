@@ -40,6 +40,11 @@ ENV/
 # 日志
 *.log
 
+# 本地会话数据库
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
 # 测试
 !tests/
 !tests/test_*.py

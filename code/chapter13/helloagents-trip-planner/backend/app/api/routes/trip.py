@@ -7,6 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from ...agents.multi_agent_orchestrator import get_multi_agent_orchestrator
 from ...models.schemas import ReplanRequest, TripPlanResponse, TripRequest
+from ...services.trip_conversation_service import get_trip_conversation_service
 
 router = APIRouter(prefix="/trip", tags=["Trip Planning"])
 logger = logging.getLogger("uvicorn.error")
@@ -21,7 +22,19 @@ async def plan_trip(request: TripRequest):
     try:
         planner = get_multi_agent_orchestrator()
         trip_plan = await run_in_threadpool(planner.plan_trip, request)
-        return TripPlanResponse(success=True, message="旅行计划生成成功", data=trip_plan)
+        conversation = get_trip_conversation_service()
+        session = await run_in_threadpool(
+            conversation.save_existing_plan,
+            request,
+            trip_plan,
+        )
+        return TripPlanResponse(
+            success=True,
+            message="旅行计划生成成功",
+            data=trip_plan,
+            session_id=session.id,
+            plan_version=session.current_version,
+        )
     except Exception as exc:
         logger.exception("Trip planning failed")
         raise HTTPException(status_code=500, detail=f"旅行计划生成失败: {exc}") from exc

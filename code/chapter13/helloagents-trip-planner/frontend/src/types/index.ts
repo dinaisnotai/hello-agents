@@ -181,10 +181,61 @@ export interface TripPlanResponse {
   success: boolean
   message: string
   data?: TripPlan
+  session_id?: string
+  plan_version?: number
 }
 
 export interface ReplanRequest {
   plan: TripPlan
   request?: TripFormData
   notes?: string
+}
+
+export interface TripRequestPatch {
+  budget_limit?: number
+  pace?: 'relaxed' | 'balanced' | 'packed'
+  add_must_visit: string[]
+  remove_must_visit: string[]
+}
+
+export interface ConversationMessage {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+export interface PlanVersionSummary {
+  version: number
+  change_summary: string
+  created_at: string
+}
+
+export interface TripSessionSummary {
+  id: string
+  title: string
+  city: string
+  current_version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface TripSessionDetail extends TripSessionSummary {
+  request: TripFormData
+  plan: TripPlan
+  messages: ConversationMessage[]
+  versions: PlanVersionSummary[]
+}
+
+export interface TripSessionResponse {
+  success: boolean
+  message: string
+  data: TripSessionDetail
+}
+
+export interface ChatMessageResponse {
+  success: boolean
+  assistant_message: string
+  applied_patch: TripRequestPatch
+  data: TripSessionDetail
 }

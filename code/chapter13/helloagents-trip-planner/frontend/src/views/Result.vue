@@ -26,6 +26,8 @@
         />
       </div>
 
+      <div class="workspace">
+        <div class="plan-column">
       <a-row :gutter="16">
         <a-col :xs="24" :md="8">
           <a-card title="预算" :bordered="false">
@@ -140,18 +142,31 @@
           </template>
         </a-list>
       </a-card>
+        </div>
+
+        <aside v-if="sessionId" class="chat-column">
+          <TripChatPanel
+            :messages="chatMessages"
+            :version="planVersion"
+            :loading="chatLoading"
+            @send="sendMessage"
+          />
+        </aside>
+      </div>
     </section>
   </main>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { replanTrip } from '@/services/api'
-import type { DayPlan, TripFormData, TripPlan } from '@/types'
+import TripChatPanel from '@/components/TripChatPanel.vue'
+import { getTripSession, replanTrip, replanTripSession, sendTripMessage } from '@/services/api'
+import type { ConversationMessage, DayPlan, TripFormData, TripPlan } from '@/types'
 
 const router = useRouter()
+const route = useRoute()
 
 const routeTypeLabel = (type: string) => ({
   walking: '步行',
@@ -165,8 +180,32 @@ const tripPlan = ref<TripPlan | null>(null)
 const tripRequest = ref<TripFormData | undefined>()
 const activeDays = ref<number[]>([0])
 const replanning = ref(false)
+const sessionId = ref('')
+const chatMessages = ref<ConversationMessage[]>([])
+const planVersion = ref(1)
+const chatLoading = ref(false)
 
-onMounted(() => {
+onMounted(async () => {
+  const querySession = typeof route.query.session === 'string' ? route.query.session : ''
+  sessionId.value = querySession || localStorage.getItem('currentTripSessionId') || ''
+  if (sessionId.value) {
+    try {
+      const response = await getTripSession(sessionId.value)
+      tripPlan.value = response.data.plan
+      tripRequest.value = response.data.request
+      chatMessages.value = response.data.messages
+      planVersion.value = response.data.current_version
+      sessionStorage.setItem('tripPlan', JSON.stringify(response.data.plan))
+      sessionStorage.setItem('tripRequest', JSON.stringify(response.data.request))
+      localStorage.setItem('currentTripSessionId', sessionId.value)
+      if (!querySession) {
+        router.replace({ path: '/result', query: { session: sessionId.value } })
+      }
+      return
+    } catch (error: any) {
+      message.warning(`${error.message}，已尝试读取本地缓存`)
+    }
+  }
   const plan = sessionStorage.getItem('tripPlan')
   const request = sessionStorage.getItem('tripRequest')
   if (plan) tripPlan.value = JSON.parse(plan)
@@ -204,20 +243,51 @@ const recalculate = async () => {
   if (!tripPlan.value) return
   replanning.value = true
   try {
-    const response = await replanTrip({
+    const payload = {
       plan: tripPlan.value,
       request: tripRequest.value,
       notes: '用户在结果页调整后重新计算'
-    })
-    if (response.success && response.data) {
-      tripPlan.value = response.data
-      sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
+    }
+    if (sessionId.value) {
+      const response = await replanTripSession(sessionId.value, payload)
+      tripPlan.value = response.data.plan
+      tripRequest.value = response.data.request
+      chatMessages.value = response.data.messages
+      planVersion.value = response.data.current_version
+      sessionStorage.setItem('tripPlan', JSON.stringify(response.data.plan))
+      sessionStorage.setItem('tripRequest', JSON.stringify(response.data.request))
       message.success('路线、预算和约束报告已更新')
+    } else {
+      const response = await replanTrip(payload)
+      if (response.success && response.data) {
+        tripPlan.value = response.data
+        sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
+        message.success('路线、预算和约束报告已更新')
+      }
     }
   } catch (error: any) {
     message.error(error.message || '重规划失败')
   } finally {
     replanning.value = false
+  }
+}
+
+const sendMessage = async (content: string) => {
+  if (!sessionId.value) return
+  chatLoading.value = true
+  try {
+    const response = await sendTripMessage(sessionId.value, content)
+    tripPlan.value = response.data.plan
+    tripRequest.value = response.data.request
+    chatMessages.value = response.data.messages
+    planVersion.value = response.data.current_version
+    sessionStorage.setItem('tripPlan', JSON.stringify(response.data.plan))
+    sessionStorage.setItem('tripRequest', JSON.stringify(response.data.request))
+    message.success('行程已更新并保存新版本')
+  } catch (error: any) {
+    message.error(error.message || '修改行程失败')
+  } finally {
+    chatLoading.value = false
   }
 }
 
@@ -280,6 +350,24 @@ const exportJson = () => {
   color: #667085;
 }
 
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 16px;
+  align-items: start;
+}
+
+.plan-column {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.chat-column {
+  min-width: 0;
+}
+
 .constraint-text {
   display: flex;
   flex-direction: column;
@@ -297,5 +385,15 @@ const exportJson = () => {
 :deep(.ant-card) {
   border-radius: 8px;
   box-shadow: 0 8px 20px rgba(21, 32, 56, 0.06);
+}
+
+@media (max-width: 991px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-column {
+    order: -1;
+  }
 }
 </style>

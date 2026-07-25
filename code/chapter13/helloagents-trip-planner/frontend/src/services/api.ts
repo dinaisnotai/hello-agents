@@ -1,5 +1,11 @@
 import axios from 'axios'
-import type { ReplanRequest, TripFormData, TripPlanResponse } from '@/types'
+import type {
+  ChatMessageResponse,
+  ReplanRequest,
+  TripFormData,
+  TripPlanResponse,
+  TripSessionResponse,
+} from '@/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 const configuredTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS || 300000)
@@ -67,6 +73,54 @@ export async function replanTrip(payload: ReplanRequest): Promise<TripPlanRespon
     return response.data
   } catch (error: any) {
     console.error('重规划失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || '重规划失败')
+  }
+}
+
+export async function createTripSession(formData: TripFormData): Promise<TripSessionResponse> {
+  try {
+    const response = await apiClient.post<TripSessionResponse>('/api/trip/sessions', formData)
+    return response.data
+  } catch (error: any) {
+    throw new Error(error.response?.data?.detail || error.message || '创建旅行会话失败')
+  }
+}
+
+export async function getTripSession(sessionId: string): Promise<TripSessionResponse> {
+  try {
+    const response = await apiClient.get<TripSessionResponse>(`/api/trip/sessions/${sessionId}`)
+    return response.data
+  } catch (error: any) {
+    throw new Error(error.response?.data?.detail || error.message || '加载旅行会话失败')
+  }
+}
+
+export async function sendTripMessage(
+  sessionId: string,
+  content: string,
+): Promise<ChatMessageResponse> {
+  try {
+    const response = await apiClient.post<ChatMessageResponse>(
+      `/api/trip/sessions/${sessionId}/messages`,
+      { content },
+    )
+    return response.data
+  } catch (error: any) {
+    throw new Error(error.response?.data?.detail || error.message || '修改行程失败')
+  }
+}
+
+export async function replanTripSession(
+  sessionId: string,
+  payload: ReplanRequest,
+): Promise<TripSessionResponse> {
+  try {
+    const response = await apiClient.post<TripSessionResponse>(
+      `/api/trip/sessions/${sessionId}/replan`,
+      payload,
+    )
+    return response.data
+  } catch (error: any) {
     throw new Error(error.response?.data?.detail || error.message || '重规划失败')
   }
 }

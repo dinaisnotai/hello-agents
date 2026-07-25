@@ -250,6 +250,8 @@ class TripPlanResponse(BaseModel):
     success: bool
     message: str = ""
     data: Optional[TripPlan] = None
+    session_id: Optional[str] = None
+    plan_version: Optional[int] = None
 
 
 class ReplanRequest(BaseModel):

@@ -204,8 +204,14 @@ const handleSubmit = async () => {
     if (response.success && response.data) {
       sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
       sessionStorage.setItem('tripRequest', JSON.stringify(payload))
+      if (response.session_id) {
+        localStorage.setItem('currentTripSessionId', response.session_id)
+      }
       message.success('旅行计划生成成功')
-      router.push('/result')
+      router.push({
+        path: '/result',
+        query: response.session_id ? { session: response.session_id } : undefined
+      })
     } else {
       message.error(response.message || '生成失败')
     }

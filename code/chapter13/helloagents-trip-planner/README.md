@@ -65,6 +65,19 @@ npm run dev
 - `AMAP_LOG_MAX_CHARS`：单次高德原始响应日志的最大字符数，默认 `50000`。
 - `VITE_API_TIMEOUT_MS`：前端规划请求的总等待时间，默认 `300000`（5 分钟）。
 - `VITE_API_BASE_URL`：默认 `http://localhost:8000`。
+- `TRIP_SESSION_DB_PATH`：可选的 SQLite 会话数据库路径；默认使用 `backend/data/trip_sessions.db`。
+
+## 多轮行程修改
+
+生成计划后，系统会自动创建持久化会话。结果页可以通过自然语言修改预算、行程节奏和必去景点；每次修改或手动重算都会保存一个新的计划版本。刷新页面时，前端使用会话 ID 从后端恢复最新请求、计划、消息和版本记录。
+
+当前会话接口：
+
+- `POST /api/trip/sessions`：创建会话并生成计划。
+- `GET /api/trip/sessions`：查询会话列表。
+- `GET /api/trip/sessions/{session_id}`：恢复会话当前状态。
+- `POST /api/trip/sessions/{session_id}/messages`：通过对话修改行程。
+- `POST /api/trip/sessions/{session_id}/replan`：保存手动调整后的重规划版本。
 
 ## 评测
 

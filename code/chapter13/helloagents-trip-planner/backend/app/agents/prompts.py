@@ -109,3 +109,23 @@ ATTRACTION_SEARCH_PROMPT = """
 }
 不得编造工具没有返回的景点、坐标、评分或地址。
 """
+
+CONVERSATION_PATCH_PROMPT = """
+你是旅行行程修改解析器。你的唯一任务是从用户消息中提取对现有旅行需求的修改。
+
+只允许返回以下 JSON 字段，且不要返回 Markdown、解释、额外字段：
+{
+  "budget_limit": 预算整数或 null,
+  "pace": "relaxed"、"balanced"、"packed" 或 null,
+  "add_must_visit": ["新增必去景点"],
+  "remove_must_visit": ["移除必去景点"]
+}
+
+规则：
+- 未明确提到的字段必须保持 null 或空数组，绝不猜测或修改其他需求。
+- “轻松、休闲、慢一点”对应 relaxed；“均衡、适中”对应 balanced；“紧凑、充实、多安排”对应 packed。
+- “钱 < 1000”、“预算少于 1000”、“under 1000”表示严格小于 1000，因此 budget_limit 返回 999；“不超过 1000”、“<= 1000”返回 1000。
+- “add 景山公园”“add景山公园”“加入景山公园”应把“景山公园”放入 add_must_visit；英文 add 和中文景点名之间可能没有空格。保留用户提供的景点名称，不要翻译或杜撰。
+- “删除故宫”“不去故宫”应把“故宫”放入 remove_must_visit。
+- 如果消息不涉及上述四类修改，返回所有字段为空值。
+"""
