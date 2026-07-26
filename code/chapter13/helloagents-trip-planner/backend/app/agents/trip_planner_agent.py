@@ -665,6 +665,106 @@ class MultiAgentTripPlanner:
                     "Budget exceeds the limit; reduced adjustable meal estimates",
                 )
 
+        time_budget = get_pace_profile(request.pace).daily_time_budget_minutes
+        overlong_days = [
+            day for day in plan.days if day.daily_duration_minutes > time_budget
+        ]
+        if overlong_days:
+            donor_day = max(overlong_days, key=lambda day: day.daily_duration_minutes)
+            optional = sorted(
+                (
+                    attraction
+                    for attraction in donor_day.attractions
+                    if not any(
+                        place_names_match(name, attraction.name)
+                        for name in request.must_visit
+                    )
+                ),
+                key=lambda attraction: (attraction.score, -attraction.visit_duration, attraction.name),
+            )
+
+            # Prefer preserving the user's selected attractions by moving an
+            # optional POI to a genuinely lighter day before removing it.
+            for attraction in optional:
+                for target_day in sorted(
+                    (day for day in plan.days if day is not donor_day),
+                    key=lambda day: (day.daily_duration_minutes, day.day_index),
+                ):
+                    extra_buffer = 0 if target_day.attractions else get_pace_profile(
+                        request.pace
+                    ).daily_buffer_minutes
+                    projected_duration = (
+                        target_day.daily_duration_minutes
+                        + attraction.visit_duration
+                        + extra_buffer
+                    )
+                    if projected_duration > time_budget:
+                        continue
+                    donor_day.attractions.remove(attraction)
+                    target_day.attractions.append(attraction)
+                    donor_day.attractions = self.spatial_planner._nearest_neighbor_order(
+                        donor_day.attractions,
+                        request.must_visit,
+                        donor_day.hotel.location if donor_day.hotel else None,
+                    )
+                    target_day.attractions = self.spatial_planner._nearest_neighbor_order(
+                        target_day.attractions,
+                        request.must_visit,
+                        target_day.hotel.location if target_day.hotel else None,
+                    )
+                    return (
+                        "move_optional_attraction_to_reduce_daily_duration",
+                        f"Moved optional attraction {attraction.name} from day "
+                        f"{donor_day.day_index + 1} to day {target_day.day_index + 1}",
+                    )
+
+            if optional:
+                attraction = optional[0]
+                donor_day.attractions.remove(attraction)
+                return (
+                    "remove_optional_attraction_to_reduce_daily_duration",
+                    f"Day {donor_day.day_index + 1} exceeds the time budget; "
+                    f"removed optional attraction {attraction.name}",
+                )
+
+            # All remaining attractions are must-visits. They may still be
+            # distributed across days without dropping a hard user request.
+            for attraction in sorted(
+                donor_day.attractions,
+                key=lambda item: (-item.visit_duration, item.name),
+            ):
+                for target_day in sorted(
+                    (day for day in plan.days if day is not donor_day),
+                    key=lambda day: (day.daily_duration_minutes, day.day_index),
+                ):
+                    extra_buffer = 0 if target_day.attractions else get_pace_profile(
+                        request.pace
+                    ).daily_buffer_minutes
+                    if (
+                        target_day.daily_duration_minutes
+                        + attraction.visit_duration
+                        + extra_buffer
+                        > time_budget
+                    ):
+                        continue
+                    donor_day.attractions.remove(attraction)
+                    target_day.attractions.append(attraction)
+                    donor_day.attractions = self.spatial_planner._nearest_neighbor_order(
+                        donor_day.attractions,
+                        request.must_visit,
+                        donor_day.hotel.location if donor_day.hotel else None,
+                    )
+                    target_day.attractions = self.spatial_planner._nearest_neighbor_order(
+                        target_day.attractions,
+                        request.must_visit,
+                        target_day.hotel.location if target_day.hotel else None,
+                    )
+                    return (
+                        "move_must_visit_to_reduce_daily_duration",
+                        f"Moved required attraction {attraction.name} from day "
+                        f"{donor_day.day_index + 1} to day {target_day.day_index + 1}",
+                    )
+
         if request.max_daily_walk_km is not None:
             over_limit_days = [
                 day for day in plan.days if day.daily_walking_distance_km > request.max_daily_walk_km
@@ -701,6 +801,14 @@ class MultiAgentTripPlanner:
         return "; ".join(failures) if failures else "All constraints passed"
 
     def _failure_reason(self, report: ConstraintReport) -> str:
+        if any(
+            not item.passed and item.name == "每日行程时长"
+            for item in report.items
+        ):
+            return (
+                "无法在当前旅行天数、节奏与必去景点要求下满足每日时长限制；"
+                "请增加旅行天数、降低行程节奏或减少必去景点。"
+            )
         failures = [item.message or item.name for item in report.items if not item.passed]
         return "; ".join(failures) or "Planning stopped before all constraints could be satisfied"
 

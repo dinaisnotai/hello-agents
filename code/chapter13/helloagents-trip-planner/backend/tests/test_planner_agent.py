@@ -153,6 +153,40 @@ class PlannerAgentTest(unittest.TestCase):
             [item.action for item in result.planning_trace],
         )
 
+    def test_repair_loop_removes_optional_attraction_when_day_is_too_long(self):
+        required = Attraction(
+            name="必去景点",
+            location=Location(longitude=116.4, latitude=39.9),
+            visit_duration=400,
+            score=100,
+        )
+        optional = Attraction(
+            name="可选景点",
+            location=Location(longitude=116.41, latitude=39.9),
+            visit_duration=200,
+            score=10,
+        )
+        request = TripRequest(
+            city="北京",
+            start_date="2026-08-01",
+            end_date="2026-08-01",
+            travel_days=1,
+            transportation="公共交通",
+            accommodation="经济型酒店",
+            must_visit=["必去景点"],
+        )
+
+        result = _repair_planner()._repair_until_stable(
+            _repair_plan(attractions=[required, optional]), request, [required, optional]
+        )
+
+        self.assertTrue(result.constraint_report.passed)
+        self.assertEqual([item.name for item in result.days[0].attractions], ["必去景点"])
+        self.assertIn(
+            "remove_optional_attraction_to_reduce_daily_duration",
+            [item.action for item in result.planning_trace],
+        )
+
     def test_repair_loop_returns_failure_reason_when_missing_must_visit_cannot_be_found(self):
         request = TripRequest(
             city="北京",

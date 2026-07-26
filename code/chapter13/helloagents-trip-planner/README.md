@@ -69,6 +69,20 @@ npm run dev
 
 ## 多轮行程修改
 
+## 配置 RAG Embedding（火山方舟）
+
+在 `backend` 目录复制 `.env.example` 为 `.env`，然后填入你自己在火山方舟控制台创建的 API Key：
+
+```dotenv
+EMBEDDING_API_KEY=你的方舟_API_Key
+EMBEDDING_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+EMBEDDING_MODEL=doubao-embedding-text-240515
+```
+
+获取方式：登录[火山方舟 API Key 控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/apikey)创建 Key；在模型/推理接入点页面开通文本向量模型，并把模型 ID 或该模型的 Endpoint ID 填到 `EMBEDDING_MODEL`。本项目会请求 `POST /embeddings`，所以 `EMBEDDING_BASE_URL` 必须保留到 `/api/v3`，不要在末尾再加 `/embeddings`。改完后重启后端即可。
+
+若 Key、模型或网络暂时不可用，RAG 会在日志中记录失败原因，并自动改用本地攻略 Markdown 的关键词检索；同一城市仍会返回参考片段，不会再是 0 条。
+
 生成计划后，系统会自动创建持久化会话。结果页可以通过自然语言修改预算、行程节奏和必去景点；每次修改或手动重算都会保存一个新的计划版本。刷新页面时，前端使用会话 ID 从后端恢复最新请求、计划、消息和版本记录。
 
 当前会话接口：

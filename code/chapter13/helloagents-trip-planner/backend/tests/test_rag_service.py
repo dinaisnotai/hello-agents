@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.rag_service import TravelGuideRAG
+from app.services.rag_service import EmbeddingError, TravelGuideRAG
 
 
 class FakeSemanticEmbedder:
@@ -22,6 +22,11 @@ class FakeSemanticEmbedder:
             else:
                 vectors.append([0.2, 0.0, 1.0])
         return vectors
+
+
+class FailingEmbedder:
+    def embed(self, texts):
+        raise EmbeddingError("embedding endpoint unavailable")
 
 
 class TravelGuideRAGTest(unittest.TestCase):
@@ -54,6 +59,15 @@ class TravelGuideRAGTest(unittest.TestCase):
 
     def test_unknown_city_does_not_receive_other_city_evidence(self):
         self.assertEqual(self.rag.search("成都", "预算 景点", top_k=5), [])
+
+    def test_keyword_fallback_returns_city_local_evidence_when_embedding_fails(self):
+        rag = TravelGuideRAG(embedder=FailingEmbedder())
+
+        results = rag.search("北京", "故宫 博物馆", top_k=3)
+
+        self.assertTrue(results)
+        self.assertTrue(all(item.city == "北京" for item in results))
+        self.assertFalse(rag._vector_search_available)
 
 
 if __name__ == "__main__":

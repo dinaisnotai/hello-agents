@@ -7,7 +7,7 @@ from app.models.agent_outputs import (
     HotelSearchResult,
     WeatherQueryResult,
 )
-from app.models.schemas import Hotel, TripPlan, TripRequest
+from app.models.schemas import ConstraintReport, Hotel, TripPlan, TripRequest
 
 
 class _Rag:
@@ -21,6 +21,15 @@ class _PlanBuilder:
 
     def build_rag_query(self, request):
         return request.city
+
+    def plan_trip(self, request):
+        return TripPlan(
+            city=request.city,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            days=[],
+            overall_suggestions="确定性重建",
+        )
 
 
 class _Specialist:
@@ -102,8 +111,30 @@ class MultiAgentOrchestratorTest(unittest.TestCase):
                 "WeatherQueryAgent": "fallback",
                 "HotelAgent": "llm",
                 "PlannerAgent": "llm",
+                "HardConstraintFallback": "not_needed",
             },
         )
+
+    def test_rebuilds_with_poi_collector_when_llm_plan_fails_constraints(self):
+        class _FailedPlanner(_Planner):
+            def run(self, **kwargs):
+                plan = super().run(**kwargs)
+                plan.constraint_report = ConstraintReport(passed=False, score=0)
+                return plan
+
+        orchestrator = MultiAgentOrchestrator.__new__(MultiAgentOrchestrator)
+        orchestrator.initialization_warning = ""
+        orchestrator.last_run_status = {}
+        orchestrator.plan_builder = _PlanBuilder()
+        orchestrator.attraction_agent = _Specialist(AttractionSearchResult())
+        orchestrator.weather_agent = _Specialist(WeatherQueryResult())
+        orchestrator.hotel_agent = _Specialist(HotelSearchResult())
+        orchestrator.planner_agent = _FailedPlanner()
+
+        plan = orchestrator.plan_trip(_request())
+
+        self.assertEqual(plan.overall_suggestions, "确定性重建")
+        self.assertEqual(orchestrator.last_run_status["HardConstraintFallback"], "used")
 
     def test_runs_three_specialists_concurrently(self):
         barrier = Barrier(3)

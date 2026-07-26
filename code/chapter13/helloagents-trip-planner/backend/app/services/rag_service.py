@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Protocol, Sequence
 
@@ -13,6 +14,9 @@ import httpx
 from ..config import settings
 from ..models.schemas import EvidenceSource
 from .city_name_service import normalize_city_name
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 CITY_BY_GUIDE_STEM = {
@@ -93,24 +97,25 @@ class TravelGuideRAG:
         self.embedder = embedder or OpenAICompatibleEmbedder()
         self._chunks: List[Dict[str, Any]] = []
         self._loaded = False
+        self._vector_search_available = False
 
     def search(self, city: str, query: str, top_k: int = 5) -> List[EvidenceSource]:
         city = normalize_city_name(city)
-        try:
-            self._load()
-        except EmbeddingError:
-            # RAG evidence is optional: a missing vector provider must not stop
-            # itinerary generation. Configuration failures remain observable in logs.
-            return []
+        self._load()
 
         candidates = [chunk for chunk in self._chunks if not city or chunk["city"] == city]
         if not candidates or not query.strip() or top_k <= 0:
             return []
 
+        if not self._vector_search_available:
+            return self._keyword_search(candidates, query, top_k)
+
         try:
             query_vector = self.embedder.embed([f"城市：{city}\n问题：{query}"])[0]
-        except (EmbeddingError, IndexError):
-            return []
+        except (EmbeddingError, IndexError) as exc:
+            logger.warning("RAG query embedding failed; using keyword retrieval: %s", exc)
+            self._vector_search_available = False
+            return self._keyword_search(candidates, query, top_k)
 
         scored = []
         for chunk in candidates:
@@ -129,6 +134,44 @@ class TravelGuideRAG:
             )
             for score, chunk in scored[:top_k]
         ]
+
+    def _keyword_search(
+        self, candidates: Sequence[Dict[str, Any]], query: str, top_k: int
+    ) -> List[EvidenceSource]:
+        """Dependency-free fallback used when the embedding service is unavailable."""
+
+        terms = self._keyword_terms(query)
+        scored = []
+        for chunk in candidates:
+            searchable = " ".join((chunk["title"], chunk["tags"], chunk["text"])).lower()
+            hits = sum(searchable.count(term) for term in terms)
+            # Keep every city-local guide section usable, even when a query has
+            # no literal overlap (for example a synonym or a very short query).
+            score = hits / max(1, len(terms)) if terms else 0.0
+            scored.append((score, chunk))
+
+        scored.sort(key=lambda item: (item[0], -int(item[1]["index"])), reverse=True)
+        return [
+            EvidenceSource(
+                title=chunk["title"],
+                city=chunk["city"],
+                source=chunk["source"],
+                snippet=chunk["text"][:240],
+                score=round(score, 4),
+            )
+            for score, chunk in scored[:top_k]
+        ]
+
+    @staticmethod
+    def _keyword_terms(query: str) -> List[str]:
+        normalized = query.lower()
+        latin_terms = re.findall(r"[a-z0-9]{2,}", normalized)
+        chinese_terms = re.findall(r"[\u4e00-\u9fff]{2,}", normalized)
+        terms = latin_terms[:]
+        for phrase in chinese_terms:
+            terms.append(phrase)
+            terms.extend(phrase[index : index + 2] for index in range(len(phrase) - 1))
+        return list(dict.fromkeys(term for term in terms if term))
 
     def _load(self) -> None:
         if self._loaded:
@@ -159,7 +202,12 @@ class TravelGuideRAG:
                     }
                 )
 
-        if chunks:
+        self._chunks = chunks
+        self._loaded = True
+        if not chunks:
+            return
+
+        try:
             vectors = self.embedder.embed(
                 [f"标题：{chunk['title']}\n标签：{chunk['tags']}\n内容：{chunk['text']}" for chunk in chunks]
             )
@@ -167,9 +215,11 @@ class TravelGuideRAG:
                 raise EmbeddingError("The number of document vectors does not match the chunks.")
             for chunk, vector in zip(chunks, vectors):
                 chunk["embedding"] = vector
-
-        self._chunks = chunks
-        self._loaded = True
+            self._vector_search_available = True
+        except EmbeddingError as exc:
+            # Preserve the parsed corpus, so callers still receive local guide
+            # evidence through keyword ranking instead of an empty RAG result.
+            logger.warning("RAG document embedding failed; using keyword retrieval: %s", exc)
 
     @staticmethod
     def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:

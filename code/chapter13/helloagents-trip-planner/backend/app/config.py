@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # OpenAI-compatible embedding endpoint.
     embedding_api_key: str = ""
     embedding_base_url: str = ""
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "doubao-embedding-text-240515"
 
     # 日志配置
     log_level: str = "INFO"

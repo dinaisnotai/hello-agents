@@ -176,11 +176,25 @@ class MultiAgentOrchestrator:
             mode=planner_mode,
             warning=self.planner_agent.last_warning,
         )
+        used_hard_constraint_fallback = False
+        if not plan.constraint_report.passed:
+            # The LLM specialists are allowed to improve recall, but never to
+            # become the source of truth for mandatory constraints. Rebuild from
+            # POICollector/map data, which has dedicated must-visit recall and
+            # deterministic filtering before scheduling.
+            logger.warning(
+                "[agent-run:%s] hard constraints failed after LLM workflow; "
+                "rebuilding with deterministic POICollector",
+                run_id,
+            )
+            plan = self.plan_builder.plan_trip(request)
+            used_hard_constraint_fallback = True
         self.last_run_status = {
             "AttractionSearchAgent": _mode(attractions.used_fallback),
             "WeatherQueryAgent": _mode(weather.used_fallback),
             "HotelAgent": _mode(hotels.used_fallback),
             "PlannerAgent": planner_mode,
+            "HardConstraintFallback": "used" if used_hard_constraint_fallback else "not_needed",
         }
         if _agent_output_logging_enabled():
             logger.info(

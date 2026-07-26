@@ -46,7 +46,7 @@ async def get_session(session_id: str):
     if detail is None:
         raise HTTPException(status_code=404, detail="旅行会话不存在")
     return TripSessionResponse(data=detail)
--
+
 
 @router.post(
     "/{session_id}/messages",
