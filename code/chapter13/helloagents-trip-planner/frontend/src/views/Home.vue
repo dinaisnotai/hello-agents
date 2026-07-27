@@ -77,6 +77,19 @@
             </a-col>
           </a-row>
 
+          <a-row :gutter="16">
+            <a-col :xs="24" :md="6">
+              <a-form-item label="每日最早出发">
+                <a-input v-model:value="formData.daily_start_time" type="time" size="large" />
+              </a-form-item>
+            </a-col>
+            <a-col :xs="24" :md="6">
+              <a-form-item label="每日最晚结束">
+                <a-input v-model:value="formData.daily_end_time" type="time" size="large" />
+              </a-form-item>
+            </a-col>
+          </a-row>
+
           <a-form-item label="旅行偏好">
             <a-checkbox-group v-model:value="formData.preferences" :options="preferenceOptions" />
           </a-form-item>
@@ -168,7 +181,9 @@ const formData = reactive<TripFormState>({
   avoid_categories: [],
   dietary_restrictions: [],
   max_daily_walk_km: 8,
-  hotel_area: ''
+  hotel_area: '',
+  daily_start_time: '',
+  daily_end_time: ''
 })
 
 watch([() => formData.start_date, () => formData.end_date], ([start, end]) => {

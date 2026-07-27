@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     embedding_base_url: str = ""
     embedding_model: str = "doubao-embedding-text-240515"
 
+    # Workflow rollout. Keep the existing orchestrator as the safe default.
+    workflow_mode: str = "legacy"
+    langgraph_checkpoint_db_path: str = ""
+    enable_llm_intent_parsing: bool = False
+
     # 日志配置
     log_level: str = "INFO"
 

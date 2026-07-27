@@ -67,10 +67,20 @@ class PlannerAgent:
         plan.risk_warnings = sorted(
             set([*plan.risk_warnings, *weather_result.risk_summary])
         )
-        logger.info(
+        logger.debug(
             "[PlannerAgent] deterministic planning elapsed_ms=%.1f",
             (perf_counter() - deterministic_started_at) * 1000,
         )
+        return self.review_plan(request, plan, weather_result, evidence)
+
+    def review_plan(
+        self,
+        request: TripRequest,
+        plan: TripPlan,
+        weather_result: WeatherQueryResult,
+        evidence: List[EvidenceSource],
+    ) -> TripPlan:
+        """Apply the optional LLM review to an already-built deterministic plan."""
 
         if self.agent is None:
             self.last_warning = "LLM 未启用，已跳过 PlannerAgent 软审查"
@@ -99,6 +109,11 @@ class PlannerAgent:
                 (perf_counter() - review_started_at) * 1000,
             )
             review = parse_agent_result(raw_result, PlannerReviewResult)
+            logger.info(
+                "[PlannerAgent] LLM review output summary=%s soft_warnings=%d",
+                review.summary.strip()[:300] or "(empty)",
+                len(review.soft_warnings),
+            )
             self._apply_review(plan, review, evidence)
             self.last_warning = ""
         except Exception as exc:

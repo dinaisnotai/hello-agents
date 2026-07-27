@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
@@ -41,10 +42,30 @@ class TripRequest(BaseModel):
     max_daily_walk_km: Optional[float] = Field(default=None, ge=0, description="Max daily walking distance")
     hotel_area: Optional[str] = Field(default="", description="Preferred hotel area")
 
+    # Optional structured intent fields. They are backward compatible with the
+    # existing frontend and let the workflow distinguish explicit form values
+    # from information inferred from free text.
+    travelers: List[str] = Field(default_factory=list, description="Travel companions")
+    energy_preference: Optional[Literal["low", "normal", "high"]] = Field(
+        default=None, description="Physical energy preference"
+    )
+    daily_start_time: Optional[str] = Field(default=None, description="Daily start time, HH:MM")
+    daily_end_time: Optional[str] = Field(default=None, description="Daily end time, HH:MM")
+    hard_constraints: List[str] = Field(default_factory=list, description="Explicit hard constraints")
+    soft_preferences: List[str] = Field(default_factory=list, description="Explicit soft preferences")
+
     @field_validator("city", mode="before")
     @classmethod
     def normalize_city(cls, value: object) -> str:
         return normalize_city_name(str(value or ""))
+
+    @field_validator("daily_start_time", "daily_end_time")
+    @classmethod
+    def validate_daily_time(cls, value: Optional[str]) -> Optional[str]:
+        if value in (None, ""):
+            return None
+        datetime.strptime(value, "%H:%M")
+        return value
 
     class Config:
         json_schema_extra = {
@@ -100,6 +121,14 @@ class Attraction(BaseModel):
     image_url: Optional[str] = None
     ticket_price: int = Field(default=0, ge=0)
     score: float = Field(default=0, description="Internal planning score")
+    opening_hours: str = ""
+    opening_time: Optional[str] = None
+    closing_time: Optional[str] = None
+    latest_entry_time: Optional[str] = None
+    hours_source: str = "unknown"
+    planned_arrival_time: Optional[str] = None
+    planned_departure_time: Optional[str] = None
+    opening_hours_status: Literal["open", "closed", "unknown"] = "unknown"
 
 
 class Meal(BaseModel):
@@ -144,6 +173,8 @@ class RouteSegment(BaseModel):
     transit_duration_minutes: int = 0
     steps: List[RouteStep] = Field(default_factory=list)
     description: str = ""
+    planned_departure_time: Optional[str] = None
+    planned_arrival_time: Optional[str] = None
 
 
 class DayPlan(BaseModel):
@@ -162,7 +193,13 @@ class DayPlan(BaseModel):
     daily_travel_minutes: int = 0
     daily_buffer_minutes: int = 0
     daily_duration_minutes: int = 0
+    daily_elapsed_minutes: int = Field(
+        default=0,
+        description="Actual minutes from daily departure until return, excluding planning buffer",
+    )
     daily_cost: int = 0
+    planned_start_time: Optional[str] = None
+    planned_end_time: Optional[str] = None
 
 
 class WeatherInfo(BaseModel):
@@ -252,6 +289,17 @@ class TripPlanResponse(BaseModel):
     data: Optional[TripPlan] = None
     session_id: Optional[str] = None
     plan_version: Optional[int] = None
+    workflow: Optional["WorkflowExecutionSummary"] = None
+
+
+class WorkflowExecutionSummary(BaseModel):
+    """Optional execution metadata that does not change the trip-plan payload."""
+
+    run_id: str
+    workflow_mode: str
+    degraded_services: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+    resumed: bool = False
 
 
 class ReplanRequest(BaseModel):
@@ -269,6 +317,11 @@ class POIInfo(BaseModel):
     tel: Optional[str] = None
     rating: Optional[float] = None
     ticket_price: int = 0
+    opening_hours: str = ""
+    opening_time: Optional[str] = None
+    closing_time: Optional[str] = None
+    latest_entry_time: Optional[str] = None
+    hours_source: str = "unknown"
 
 
 class POISearchResponse(BaseModel):

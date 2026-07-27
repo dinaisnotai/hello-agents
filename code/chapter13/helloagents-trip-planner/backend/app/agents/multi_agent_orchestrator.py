@@ -28,7 +28,9 @@ logger = logging.getLogger("uvicorn.error")
 
 
 def _agent_output_logging_enabled() -> bool:
-    return os.getenv("AGENT_LOG_OUTPUTS", "true").strip().lower() not in {
+    """Detailed specialist payloads are opt-in because map results are large."""
+
+    return os.getenv("AGENT_LOG_OUTPUTS", "false").strip().lower() not in {
         "0",
         "false",
         "no",

@@ -7,7 +7,12 @@ from app.models.agent_outputs import (
     HotelSearchResult,
     WeatherQueryResult,
 )
-from app.agents.trip_planner_agent import BudgetEstimator, ConstraintChecker, MultiAgentTripPlanner
+from app.agents.trip_planner_agent import (
+    BudgetEstimator,
+    ConstraintChecker,
+    MultiAgentTripPlanner,
+    _format_clock,
+)
 from app.models.schemas import (
     Attraction,
     DayPlan,
@@ -15,6 +20,7 @@ from app.models.schemas import (
     Hotel,
     Location,
     PlanningTraceItem,
+    RouteSegment,
     TripPlan,
     TripRequest,
     WeatherInfo,
@@ -58,6 +64,30 @@ class _StubAgent:
 class _NoRouteEvaluator:
     def build_day_routes(self, day, city):
         return []
+
+
+class _RemoteRouteEvaluator:
+    def build_day_routes(self, day, city):
+        if not day.attractions or not day.hotel:
+            return []
+        attraction = day.attractions[0]
+        leg_minutes = 180 if attraction.name == "远郊景点" else 20
+        return [
+            RouteSegment(
+                day_index=day.day_index,
+                origin=day.hotel.name,
+                destination=attraction.name,
+                route_type="transit",
+                duration_minutes=leg_minutes,
+            ),
+            RouteSegment(
+                day_index=day.day_index,
+                origin=attraction.name,
+                destination=day.hotel.name,
+                route_type="transit",
+                duration_minutes=leg_minutes,
+            ),
+        ]
 
 
 def _repair_planner():
@@ -124,6 +154,154 @@ def _inputs():
 
 
 class PlannerAgentTest(unittest.TestCase):
+    def test_clock_format_does_not_hide_next_day_return(self):
+        self.assertEqual(_format_clock(23 * 60 + 59), "23:59")
+        self.assertEqual(_format_clock(24 * 60 + 38), "次日00:38")
+
+    def test_multi_day_constraint_rejects_an_empty_day(self):
+        request = _request().model_copy(update={"travel_days": 2})
+        plan = _repair_plan()
+        plan.days.append(
+            plan.days[0].model_copy(
+                deep=True,
+                update={"day_index": 1, "date": "2026-08-02"},
+            )
+        )
+        plan.days[0].attractions = [
+            Attraction(
+                name="已有景点",
+                location=Location(longitude=116.4, latitude=39.9),
+            )
+        ]
+
+        report = ConstraintChecker().check(plan, request)
+
+        coverage = next(item for item in report.items if item.name == "每日行程覆盖")
+        self.assertFalse(coverage.passed)
+        self.assertEqual(coverage.severity, "blocker")
+
+    def test_empty_day_is_filled_only_after_candidate_is_feasible(self):
+        planner = _repair_planner()
+        request = _request().model_copy(update={"travel_days": 2})
+        existing = Attraction(
+            name="已有景点",
+            location=Location(longitude=116.4, latitude=39.9),
+        )
+        candidate = Attraction(
+            name="候选景点",
+            location=Location(longitude=116.41, latitude=39.9),
+        )
+        plan = _repair_plan(attractions=[existing])
+        plan.days.append(
+            plan.days[0].model_copy(
+                deep=True,
+                update={
+                    "day_index": 1,
+                    "date": "2026-08-02",
+                    "attractions": [],
+                },
+            )
+        )
+        planner._recalculate(plan, request)
+
+        action = planner._apply_next_repair(
+            plan, request, [existing, candidate]
+        )
+
+        self.assertEqual(action[0], "fill_empty_day_with_feasible_attraction")
+        self.assertEqual([item.name for item in plan.days[1].attractions], ["候选景点"])
+
+    def test_cross_day_move_uses_round_trip_time_for_remote_attraction(self):
+        planner = _repair_planner()
+        planner.route_evaluator = _RemoteRouteEvaluator()
+        request = _request().model_copy(
+            update={
+                "travel_days": 2,
+                "daily_start_time": "13:30",
+                "daily_end_time": "22:30",
+            }
+        )
+        remote = Attraction(
+            name="远郊景点",
+            location=Location(longitude=116.0, latitude=40.35),
+            visit_duration=240,
+        )
+        donor = _repair_plan(attractions=[remote]).days[0]
+        donor.hotel = Hotel(
+            name="测试酒店",
+            location=Location(longitude=116.4, latitude=39.9),
+        )
+        target = donor.model_copy(
+            deep=True,
+            update={"day_index": 1, "date": "2026-08-02", "attractions": []},
+        )
+
+        moved = planner._try_move_attraction(
+            donor, target, remote, request
+        )
+
+        self.assertFalse(moved)
+        self.assertEqual([item.name for item in donor.attractions], ["远郊景点"])
+        self.assertEqual(target.attractions, [])
+
+    def test_unknown_museum_uses_conservative_closing_policy(self):
+        museum = Attraction(
+            name="93号院博物馆",
+            category="博物馆",
+            location=Location(longitude=116.4, latitude=39.9),
+        )
+
+        MultiAgentTripPlanner._apply_conservative_opening_hours([museum])
+
+        self.assertEqual(museum.opening_time, "09:00")
+        self.assertEqual(museum.closing_time, "18:00")
+        self.assertEqual(museum.latest_entry_time, "16:30")
+        self.assertEqual(museum.hours_source, "category_estimate")
+
+    def test_opening_hours_constraint_rejects_late_arrival_and_repairs_optional_poi(self):
+        first = Attraction(
+            name="Long first attraction",
+            location=Location(longitude=116.4, latitude=39.9),
+            visit_duration=240,
+            opening_time="09:00",
+            closing_time="21:00",
+            hours_source="test",
+        )
+        closing_soon = Attraction(
+            name="Closes at five",
+            location=Location(longitude=116.41, latitude=39.9),
+            visit_duration=120,
+            opening_time="09:00",
+            closing_time="17:00",
+            hours_source="test",
+        )
+        request = _request().model_copy(
+            update={"daily_start_time": "13:00", "daily_end_time": "22:00"}
+        )
+        plan = _repair_plan(attractions=[first, closing_soon])
+        plan.days[0].route_segments = [
+            RouteSegment(
+                day_index=0,
+                origin=first.name,
+                destination=closing_soon.name,
+                duration_minutes=60,
+            )
+        ]
+        planner = _repair_planner()
+
+        planner._schedule_day_opening_hours(plan.days[0], request)
+        report = ConstraintChecker().check(plan, request)
+
+        self.assertEqual(closing_soon.planned_arrival_time, "18:00")
+        self.assertEqual(closing_soon.opening_hours_status, "closed")
+        self.assertFalse(report.passed)
+        self.assertFalse(
+            next(item for item in report.items if item.name == "Opening-hours feasibility").passed
+        )
+        action = planner._apply_next_repair(plan, request, [first, closing_soon])
+        self.assertEqual(action[0], "remove_closed_optional_attraction")
+        self.assertEqual(plan.days[0].attractions, [first])
+
     def test_repair_loop_removes_low_priority_attraction_and_records_trace(self):
         attraction = Attraction(
             name="可选景点",

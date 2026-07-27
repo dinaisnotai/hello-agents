@@ -16,6 +16,13 @@ export interface Attraction {
   image_url?: string
   ticket_price?: number
   score?: number
+  opening_hours?: string
+  opening_time?: string
+  closing_time?: string
+  planned_arrival_time?: string
+  planned_departure_time?: string
+  opening_hours_status?: 'open' | 'closed' | 'unknown'
+  hours_source?: string
 }
 
 export interface Meal {
@@ -60,6 +67,8 @@ export interface RouteSegment {
   transit_duration_minutes: number
   steps: RouteStep[]
   description: string
+  planned_departure_time?: string
+  planned_arrival_time?: string
 }
 
 export interface Budget {
@@ -120,7 +129,10 @@ export interface DayPlan {
   daily_travel_minutes?: number
   daily_buffer_minutes?: number
   daily_duration_minutes?: number
+  daily_elapsed_minutes?: number
   daily_cost?: number
+  planned_start_time?: string
+  planned_end_time?: string
 }
 
 export interface WeatherInfo {
@@ -175,6 +187,8 @@ export interface TripFormData {
   dietary_restrictions: string[]
   max_daily_walk_km?: number
   hotel_area?: string
+  daily_start_time?: string
+  daily_end_time?: string
 }
 
 export interface TripPlanResponse {

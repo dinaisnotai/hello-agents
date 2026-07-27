@@ -142,6 +142,7 @@ class AmapRouteTest(unittest.TestCase):
                                         "duration": "600",
                                         "steps": [{"instruction": "步行至西土城站"}],
                                     },
+                                    "railway": {"spaces": []},
                                     "bus": {
                                         "buslines": [
                                             {

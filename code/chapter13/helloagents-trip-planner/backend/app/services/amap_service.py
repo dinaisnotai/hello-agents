@@ -75,7 +75,7 @@ class AmapService:
             )
             pois = self._parse_pois(data, keywords, city)
         except Exception as exc:
-            print(f"POI search fallback for {city}/{keywords}: {exc}")
+            logger.debug("POI search fallback for %s/%s: %s", city, keywords, exc)
             pois = self._fallback_pois(city, keywords)
 
         if not pois:
@@ -100,7 +100,7 @@ class AmapService:
             )
             weather = self._parse_weather(data)
         except Exception as exc:
-            print(f"Weather fallback for {city}: {exc}")
+            logger.debug("Weather fallback for %s: %s", city, exc)
             weather = []
 
         self.cache.set(cache_key, weather)
@@ -134,7 +134,7 @@ class AmapService:
                 destination_city=destination_city,
             )
         except Exception as exc:
-            print(f"Route fallback for {origin_address}->{destination_address}: {exc}")
+            logger.debug("Route fallback for %s -> %s: %s", origin_address, destination_address, exc)
             route = RouteInfo(route_type=route_type, description="Route service unavailable; used estimated distance.")
 
         self.cache.set(cache_key, route)
@@ -167,9 +167,11 @@ class AmapService:
                     route.description = f"[amap] {route.description}"
                     return route
             except Exception as exc:
-                print(
-                    f"Amap route unavailable for "
-                    f"{origin_name}->{destination_name}: {exc}"
+                logger.debug(
+                    "Amap route unavailable for %s -> %s: %s",
+                    origin_name,
+                    destination_name,
+                    exc,
                 )
 
         estimated = self.estimate_route_between_locations(
@@ -209,7 +211,7 @@ class AmapService:
                 args["city"] = city
             return self._parse_location(self._request("/geocode/geo", args))
         except Exception as exc:
-            print(f"Geocode fallback for {address}: {exc}")
+            logger.debug("Geocode fallback for %s: %s", address, exc)
             return None
 
     def get_poi_detail(self, poi_id: str) -> Dict[str, Any]:
@@ -309,6 +311,7 @@ class AmapService:
             if not location:
                 location = self._fallback_location(city, index)
             biz_ext = item.get("biz_ext") if isinstance(item.get("biz_ext"), dict) else {}
+            hours = self._opening_hours_fields(item, biz_ext)
             address = item.get("address")
             if not isinstance(address, str):
                 address = city
@@ -327,9 +330,48 @@ class AmapService:
                     tel=tel,
                     rating=self._safe_float(item.get("rating") or biz_ext.get("rating")),
                     ticket_price=self._estimate_ticket_price(str(item.get("type") or keywords)),
+                    **hours,
                 )
             )
         return pois
+
+    @staticmethod
+    def _opening_hours_fields(item: Dict[str, Any], biz_ext: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize the common POI-detail hour fields without guessing missing data."""
+
+        raw = next(
+            (
+                value
+                for value in (
+                    item.get("opening_hours"),
+                    item.get("business_hours"),
+                    item.get("business"),
+                    biz_ext.get("opening_hours"),
+                    biz_ext.get("business_hours"),
+                    biz_ext.get("business"),
+                )
+                if isinstance(value, str) and value.strip()
+            ),
+            "",
+        )
+        times = re.findall(r"(?:[01]?\d|2[0-3]):[0-5]\d", raw)
+        opening_time = times[0] if len(times) >= 2 else None
+        closing_time = times[1] if len(times) >= 2 else None
+        latest_entry = next(
+            (
+                value
+                for value in (item.get("latest_entry_time"), biz_ext.get("latest_entry_time"))
+                if isinstance(value, str) and re.fullmatch(r"(?:[01]?\d|2[0-3]):[0-5]\d", value)
+            ),
+            None,
+        )
+        return {
+            "opening_hours": raw,
+            "opening_time": opening_time,
+            "closing_time": closing_time,
+            "latest_entry_time": latest_entry,
+            "hours_source": "amap" if opening_time and closing_time else "unknown",
+        }
 
     def _parse_weather(self, raw: str) -> List[WeatherInfo]:
         data = self._extract_json(raw)
@@ -434,15 +476,20 @@ class AmapService:
             railway = segment.get("railway")
             if isinstance(railway, dict) and railway:
                 leg_duration = int(self._safe_float(railway.get("time") or railway.get("duration")) or 0)
-                steps.append(
-                    RouteStep(
-                        mode="railway",
-                        name=str(railway.get("name") or railway.get("trip") or "铁路"),
-                        distance_meters=self._safe_float(railway.get("distance")) or 0,
-                        duration_minutes=max(1, round(leg_duration / 60)) if leg_duration else 0,
-                        instruction="乘坐铁路",
+                leg_distance = self._safe_float(railway.get("distance")) or 0
+                railway_name = str(railway.get("name") or railway.get("trip") or "")
+                # Amap often emits an empty railway object between ordinary bus
+                # legs. It is a schema placeholder, not a real zero-minute train.
+                if leg_duration > 0 or leg_distance > 0 or railway_name:
+                    steps.append(
+                        RouteStep(
+                            mode="railway",
+                            name=railway_name or "铁路",
+                            distance_meters=leg_distance,
+                            duration_minutes=max(1, round(leg_duration / 60)) if leg_duration else 0,
+                            instruction="乘坐铁路",
+                        )
                     )
-                )
 
         if walking_distance <= 0:
             walking_distance = sum(step.distance_meters for step in steps if step.mode == "walking")

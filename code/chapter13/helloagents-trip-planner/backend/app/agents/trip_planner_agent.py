@@ -42,6 +42,33 @@ class _POICandidate:
     score: float = 0
 
 
+def _clock_minutes(value: str | None, default: int) -> int:
+    if not value:
+        return default
+    try:
+        parsed = datetime.strptime(value, "%H:%M")
+        return parsed.hour * 60 + parsed.minute
+    except ValueError:
+        return default
+
+
+def _format_clock(minutes: int) -> str:
+    minutes = max(0, minutes)
+    day_offset, clock_minutes = divmod(minutes, 24 * 60)
+    clock = f"{clock_minutes // 60:02d}:{clock_minutes % 60:02d}"
+    return clock if day_offset == 0 else f"次日{clock}"
+
+
+def daily_time_budget_minutes(request: TripRequest) -> int:
+    """Use an explicit user availability window before falling back to pace."""
+
+    start = _clock_minutes(request.daily_start_time, -1)
+    end = _clock_minutes(request.daily_end_time, -1)
+    if start >= 0 and end > start:
+        return end - start
+    return get_pace_profile(request.pace).daily_time_budget_minutes
+
+
 class POICollector:
     def __init__(self, amap_service: AmapService):
         self.amap_service = amap_service
@@ -170,6 +197,11 @@ class POICollector:
             poi_id=poi.id,
             ticket_price=poi.ticket_price,
             score=candidate.score,
+            opening_hours=poi.opening_hours,
+            opening_time=poi.opening_time,
+            closing_time=poi.closing_time,
+            latest_entry_time=poi.latest_entry_time,
+            hours_source=poi.hours_source,
         )
 
     def collect_hotel(self, request: TripRequest) -> Hotel:
@@ -350,6 +382,28 @@ class ConstraintChecker:
             )
 
         all_names = [attr.name for day in plan.days for attr in day.attractions]
+        empty_days = [day.day_index + 1 for day in plan.days if not day.attractions]
+        if len(plan.days) > 1:
+            days_covered = not empty_days
+            items.append(
+                ConstraintItem(
+                    name="每日行程覆盖",
+                    passed=days_covered,
+                    actual=(
+                        "每天均有游览安排"
+                        if days_covered
+                        else f"第{', '.join(map(str, empty_days))}天空白"
+                    ),
+                    expected="多日旅行每天至少安排一个可执行游览点",
+                    severity="blocker" if not days_covered else "info",
+                    message=(
+                        "每天均有有效行程"
+                        if days_covered
+                        else "存在空白日，需要从未使用候选中补充可执行景点"
+                    ),
+                )
+            )
+
         for must_visit in request.must_visit:
             passed = any(place_names_match(must_visit, name) for name in all_names)
             items.append(
@@ -408,21 +462,79 @@ class ConstraintChecker:
                 )
             )
 
-        time_budget = get_pace_profile(request.pace).daily_time_budget_minutes
+        closed_attractions = [
+            attraction
+            for day in plan.days
+            for attraction in day.attractions
+            if attraction.opening_hours_status == "closed"
+        ]
+        if closed_attractions:
+            details = "; ".join(
+                f"{item.name} {item.planned_arrival_time}-{item.planned_departure_time} "
+                f"(closes {item.closing_time})"
+                for item in closed_attractions
+            )
+            items.append(
+                ConstraintItem(
+                    name="Opening-hours feasibility",
+                    passed=False,
+                    actual=details,
+                    expected="Each visit must finish before closing time and enter before last entry",
+                    severity="blocker",
+                    message="At least one attraction is scheduled outside its published opening hours",
+                )
+            )
+
+        unknown_hour_attractions = [
+            attraction.name
+            for day in plan.days
+            for attraction in day.attractions
+            if attraction.opening_hours_status == "unknown"
+        ]
+        if unknown_hour_attractions:
+            items.append(
+                ConstraintItem(
+                    name="Opening-hours data coverage",
+                    passed=True,
+                    actual=", ".join(unknown_hour_attractions),
+                    expected="Verify these attractions with the official source before departure",
+                    severity="warning",
+                    message="Some attractions have no reliable opening-hours data; they require confirmation",
+                )
+            )
+
+        time_budget = daily_time_budget_minutes(request)
+        use_actual_window = bool(request.daily_start_time and request.daily_end_time)
         longest_day = max(
-            (day.daily_duration_minutes for day in plan.days), default=0
+            (
+                day.daily_elapsed_minutes
+                if use_actual_window
+                else day.daily_duration_minutes
+                for day in plan.days
+            ),
+            default=0,
         )
         time_passed = longest_day <= time_budget
         items.append(
             ConstraintItem(
-                name="每日行程时长",
+                name="每日返程时间" if use_actual_window else "每日行程时长",
                 passed=time_passed,
                 actual=f"最长{longest_day}分钟",
                 expected=f"不超过{time_budget}分钟",
-                severity="warning" if not time_passed else "info",
+                severity=(
+                    "blocker"
+                    if not time_passed and use_actual_window
+                    else "warning"
+                    if not time_passed
+                    else "info"
+                ),
                 message=(
-                    "每日游览、交通和缓冲时间在节奏预算内"
+                    "每天均可在用户指定的最晚时间前返回"
+                    if time_passed and use_actual_window
+                    else "每日游览、交通和缓冲时间在节奏预算内"
                     if time_passed
+                    else "真实路线显示当天无法在用户指定的最晚时间前返回"
+                    if use_actual_window
                     else "长耗时或远郊活动已单独安排，但当天仍可能较累"
                 ),
             )
@@ -496,6 +608,7 @@ class MultiAgentTripPlanner:
     ) -> TripPlan:
         """Build a plan from specialist outputs without searching again."""
 
+        self._apply_conservative_opening_hours(attractions)
         days = self._assign_days(request, attractions, hotel)
         plan = TripPlan(
             city=request.city,
@@ -509,6 +622,29 @@ class MultiAgentTripPlanner:
         )
         plan = self._repair_until_stable(plan, request, attractions)
         return self.reviewer.review(plan, request)
+
+    @staticmethod
+    def _apply_conservative_opening_hours(attractions: List[Attraction]) -> None:
+        """Prevent obviously late visits when a POI omits its hours.
+
+        These are conservative category policies, never represented as live
+        provider data. Unknown commercial and street locations remain unknown.
+        """
+
+        for attraction in attractions:
+            if attraction.opening_time and attraction.closing_time:
+                continue
+            text = f"{attraction.name} {attraction.category or ''}"
+            if any(term in text for term in ("博物馆", "美术馆", "展览", "文化馆", "纪念馆")):
+                attraction.opening_time = "09:00"
+                attraction.closing_time = "18:00"
+                attraction.latest_entry_time = "16:30"
+                attraction.hours_source = "category_estimate"
+            elif any(term in text for term in ("故宫", "寺", "宫", "遗址", "古迹")):
+                attraction.opening_time = "08:00"
+                attraction.closing_time = "17:30"
+                attraction.latest_entry_time = "16:00"
+                attraction.hours_source = "category_estimate"
 
     def replan(self, replan_request: ReplanRequest) -> TripPlan:
         plan = replan_request.plan
@@ -588,11 +724,15 @@ class MultiAgentTripPlanner:
 
     def _recalculate(self, plan: TripPlan, request: TripRequest) -> None:
         for day in plan.days:
-            day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
-            self._update_day_metrics(day, request.pace)
+            self._recalculate_day(day, request)
         plan.route_segments = [segment for day in plan.days for segment in day.route_segments]
         plan.budget = self.budget_estimator.estimate(plan.days, request)
         plan.constraint_report = self.constraint_checker.check(plan, request)
+
+    def _recalculate_day(self, day: DayPlan, request: TripRequest) -> None:
+        day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
+        self._schedule_day_opening_hours(day, request)
+        self._update_day_metrics(day, request.pace)
 
     def _apply_next_repair(
         self,
@@ -627,6 +767,63 @@ class MultiAgentTripPlanner:
             return (
                 "add_missing_must_visit",
                 f"Added required attraction: {candidate.name}",
+            )
+
+        empty_days = [day for day in plan.days if not day.attractions]
+        if empty_days:
+            target_day = min(empty_days, key=lambda day: day.day_index)
+            unused = [
+                attraction
+                for attraction in available_attractions
+                if not any(
+                    place_names_match(attraction.name, planned_name)
+                    for planned_name in planned_names
+                )
+            ]
+            for attraction in sorted(
+                unused,
+                key=lambda item: (-item.score, item.name, item.poi_id or ""),
+            ):
+                if self._try_add_attraction(target_day, attraction, request):
+                    return (
+                        "fill_empty_day_with_feasible_attraction",
+                        f"Added {attraction.name} to day {target_day.day_index + 1} "
+                        "after validating real routes, opening hours, and return time",
+                    )
+
+        closed_optional = [
+            (day, attraction)
+            for day in plan.days
+            for attraction in day.attractions
+            if attraction.opening_hours_status == "closed"
+            and not any(place_names_match(name, attraction.name) for name in request.must_visit)
+        ]
+        if closed_optional:
+            donor_day, attraction = min(
+                closed_optional,
+                key=lambda item: (item[1].score, -item[1].visit_duration, item[1].name),
+            )
+            for target_day in sorted(
+                (day for day in plan.days if day is not donor_day),
+                key=lambda day: (
+                    len(day.attractions),
+                    day.daily_elapsed_minutes,
+                    day.day_index,
+                ),
+            ):
+                if self._try_move_attraction(
+                    donor_day, target_day, attraction, request
+                ):
+                    return (
+                        "move_closed_optional_attraction",
+                        f"Moved {attraction.name} from day {donor_day.day_index + 1} "
+                        f"to day {target_day.day_index + 1}, where it fits opening hours and return time",
+                    )
+
+            donor_day.attractions.remove(attraction)
+            return (
+                "remove_closed_optional_attraction",
+                f"Removed {attraction.name}; its scheduled visit is outside published opening hours",
             )
 
         if request.budget_limit is not None and plan.budget and plan.budget.total > request.budget_limit:
@@ -665,12 +862,18 @@ class MultiAgentTripPlanner:
                     "Budget exceeds the limit; reduced adjustable meal estimates",
                 )
 
-        time_budget = get_pace_profile(request.pace).daily_time_budget_minutes
         overlong_days = [
-            day for day in plan.days if day.daily_duration_minutes > time_budget
+            day for day in plan.days if self._day_exceeds_window(day, request)
         ]
         if overlong_days:
-            donor_day = max(overlong_days, key=lambda day: day.daily_duration_minutes)
+            donor_day = max(
+                overlong_days,
+                key=lambda day: (
+                    day.daily_elapsed_minutes
+                    if request.daily_start_time and request.daily_end_time
+                    else day.daily_duration_minutes
+                ),
+            )
             optional = sorted(
                 (
                     attraction
@@ -683,40 +886,25 @@ class MultiAgentTripPlanner:
                 key=lambda attraction: (attraction.score, -attraction.visit_duration, attraction.name),
             )
 
-            # Prefer preserving the user's selected attractions by moving an
-            # optional POI to a genuinely lighter day before removing it.
+            # Evaluate both affected days with real routes. Adding only the
+            # visit duration badly underestimates remote POIs such as Badaling.
             for attraction in optional:
                 for target_day in sorted(
                     (day for day in plan.days if day is not donor_day),
-                    key=lambda day: (day.daily_duration_minutes, day.day_index),
+                    key=lambda day: (
+                        len(day.attractions),
+                        day.daily_elapsed_minutes,
+                        day.day_index,
+                    ),
                 ):
-                    extra_buffer = 0 if target_day.attractions else get_pace_profile(
-                        request.pace
-                    ).daily_buffer_minutes
-                    projected_duration = (
-                        target_day.daily_duration_minutes
-                        + attraction.visit_duration
-                        + extra_buffer
-                    )
-                    if projected_duration > time_budget:
-                        continue
-                    donor_day.attractions.remove(attraction)
-                    target_day.attractions.append(attraction)
-                    donor_day.attractions = self.spatial_planner._nearest_neighbor_order(
-                        donor_day.attractions,
-                        request.must_visit,
-                        donor_day.hotel.location if donor_day.hotel else None,
-                    )
-                    target_day.attractions = self.spatial_planner._nearest_neighbor_order(
-                        target_day.attractions,
-                        request.must_visit,
-                        target_day.hotel.location if target_day.hotel else None,
-                    )
-                    return (
-                        "move_optional_attraction_to_reduce_daily_duration",
-                        f"Moved optional attraction {attraction.name} from day "
-                        f"{donor_day.day_index + 1} to day {target_day.day_index + 1}",
-                    )
+                    if self._try_move_attraction(
+                        donor_day, target_day, attraction, request
+                    ):
+                        return (
+                            "move_optional_attraction_to_reduce_daily_duration",
+                            f"Moved optional attraction {attraction.name} from day "
+                            f"{donor_day.day_index + 1} to day {target_day.day_index + 1}",
+                        )
 
             if optional:
                 attraction = optional[0]
@@ -735,35 +923,20 @@ class MultiAgentTripPlanner:
             ):
                 for target_day in sorted(
                     (day for day in plan.days if day is not donor_day),
-                    key=lambda day: (day.daily_duration_minutes, day.day_index),
+                    key=lambda day: (
+                        len(day.attractions),
+                        day.daily_elapsed_minutes,
+                        day.day_index,
+                    ),
                 ):
-                    extra_buffer = 0 if target_day.attractions else get_pace_profile(
-                        request.pace
-                    ).daily_buffer_minutes
-                    if (
-                        target_day.daily_duration_minutes
-                        + attraction.visit_duration
-                        + extra_buffer
-                        > time_budget
+                    if self._try_move_attraction(
+                        donor_day, target_day, attraction, request
                     ):
-                        continue
-                    donor_day.attractions.remove(attraction)
-                    target_day.attractions.append(attraction)
-                    donor_day.attractions = self.spatial_planner._nearest_neighbor_order(
-                        donor_day.attractions,
-                        request.must_visit,
-                        donor_day.hotel.location if donor_day.hotel else None,
-                    )
-                    target_day.attractions = self.spatial_planner._nearest_neighbor_order(
-                        target_day.attractions,
-                        request.must_visit,
-                        target_day.hotel.location if target_day.hotel else None,
-                    )
-                    return (
-                        "move_must_visit_to_reduce_daily_duration",
-                        f"Moved required attraction {attraction.name} from day "
-                        f"{donor_day.day_index + 1} to day {target_day.day_index + 1}",
-                    )
+                        return (
+                            "move_must_visit_to_reduce_daily_duration",
+                            f"Moved required attraction {attraction.name} from day "
+                            f"{donor_day.day_index + 1} to day {target_day.day_index + 1}",
+                        )
 
         if request.max_daily_walk_km is not None:
             over_limit_days = [
@@ -779,6 +952,76 @@ class MultiAgentTripPlanner:
                     )
 
         return None
+
+    def _try_move_attraction(
+        self,
+        donor_day: DayPlan,
+        target_day: DayPlan,
+        attraction: Attraction,
+        request: TripRequest,
+    ) -> bool:
+        """Commit a cross-day move only after real routes make both days feasible."""
+
+        candidate_donor = deepcopy(donor_day)
+        candidate_target = deepcopy(target_day)
+        candidate_donor.attractions = [
+            item
+            for item in candidate_donor.attractions
+            if item.name != attraction.name
+        ]
+        candidate_target.attractions.append(deepcopy(attraction))
+        for candidate in (candidate_donor, candidate_target):
+            candidate.attractions = self.spatial_planner._nearest_neighbor_order(
+                candidate.attractions,
+                request.must_visit,
+                candidate.hotel.location if candidate.hotel else None,
+            )
+            self._recalculate_day(candidate, request)
+
+        if not self._day_is_feasible(candidate_target, request):
+            return False
+        if candidate_donor.attractions and not self._day_is_feasible(
+            candidate_donor, request
+        ):
+            return False
+
+        donor_day.attractions = candidate_donor.attractions
+        target_day.attractions = candidate_target.attractions
+        return True
+
+    def _try_add_attraction(
+        self,
+        target_day: DayPlan,
+        attraction: Attraction,
+        request: TripRequest,
+    ) -> bool:
+        candidate = deepcopy(target_day)
+        candidate.attractions.append(deepcopy(attraction))
+        candidate.attractions = self.spatial_planner._nearest_neighbor_order(
+            candidate.attractions,
+            request.must_visit,
+            candidate.hotel.location if candidate.hotel else None,
+        )
+        self._recalculate_day(candidate, request)
+        if not self._day_is_feasible(candidate, request):
+            return False
+        target_day.attractions = candidate.attractions
+        return True
+
+    def _day_is_feasible(self, day: DayPlan, request: TripRequest) -> bool:
+        return (
+            not any(
+                attraction.opening_hours_status == "closed"
+                for attraction in day.attractions
+            )
+            and not self._day_exceeds_window(day, request)
+        )
+
+    def _day_exceeds_window(self, day: DayPlan, request: TripRequest) -> bool:
+        time_budget = daily_time_budget_minutes(request)
+        if request.daily_start_time and request.daily_end_time:
+            return day.daily_elapsed_minutes > time_budget
+        return day.daily_duration_minutes > time_budget
 
     def _plan_rank(self, plan: TripPlan, request: TripRequest) -> tuple:
         failed_count = sum(not item.passed for item in plan.constraint_report.items)
@@ -802,7 +1045,7 @@ class MultiAgentTripPlanner:
 
     def _failure_reason(self, report: ConstraintReport) -> str:
         if any(
-            not item.passed and item.name == "每日行程时长"
+            not item.passed and item.name in {"每日行程时长", "每日返程时间"}
             for item in report.items
         ):
             return (
@@ -823,6 +1066,7 @@ class MultiAgentTripPlanner:
             must_visit=request.must_visit,
             hotel_location=hotel.location,
             transportation=request.transportation,
+            daily_time_budget_minutes=daily_time_budget_minutes(request),
         )
         days: List[DayPlan] = []
 
@@ -842,6 +1086,42 @@ class MultiAgentTripPlanner:
                 )
             )
         return days
+
+    def _schedule_day_opening_hours(self, day: DayPlan, request: TripRequest) -> None:
+        """Calculate visit windows after routes are known and mark hard violations."""
+
+        current = _clock_minutes(request.daily_start_time, 9 * 60)
+        start_minutes = current
+        day.planned_start_time = _format_clock(current)
+        incoming_by_destination = {segment.destination: segment for segment in day.route_segments}
+        for attraction in day.attractions:
+            incoming = incoming_by_destination.get(attraction.name)
+            arrival = current + (incoming.duration_minutes if incoming else 0)
+            if incoming is not None:
+                incoming.planned_departure_time = _format_clock(current)
+                incoming.planned_arrival_time = _format_clock(arrival)
+            opening = _clock_minutes(attraction.opening_time, 0)
+            start = max(arrival, opening) if attraction.opening_time else arrival
+            departure = start + attraction.visit_duration
+            closing = _clock_minutes(attraction.closing_time, 24 * 60)
+            latest_entry = _clock_minutes(attraction.latest_entry_time, closing)
+            attraction.planned_arrival_time = _format_clock(arrival)
+            attraction.planned_departure_time = _format_clock(departure)
+            if not attraction.opening_time or not attraction.closing_time:
+                attraction.opening_hours_status = "unknown"
+            elif start > latest_entry or departure > closing:
+                attraction.opening_hours_status = "closed"
+            else:
+                attraction.opening_hours_status = "open"
+            current = departure
+        if day.route_segments and day.attractions:
+            return_segment = day.route_segments[-1]
+            if return_segment.origin == day.attractions[-1].name:
+                return_segment.planned_departure_time = _format_clock(current)
+                current += return_segment.duration_minutes
+                return_segment.planned_arrival_time = _format_clock(current)
+        day.planned_end_time = _format_clock(current)
+        day.daily_elapsed_minutes = current - start_minutes
 
     def _update_day_metrics(self, day: DayPlan, pace: str) -> None:
         profile = get_pace_profile(pace)

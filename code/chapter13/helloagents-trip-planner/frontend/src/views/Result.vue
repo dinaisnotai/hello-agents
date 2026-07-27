@@ -90,6 +90,7 @@
               <a-descriptions-item label="交通时间">{{ formatMinutes(day.daily_travel_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="餐饮及缓冲">{{ formatMinutes(day.daily_buffer_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="全天合计">{{ formatMinutes(day.daily_duration_minutes) }}</a-descriptions-item>
+              <a-descriptions-item label="计划时段">{{ day.planned_start_time || '--:--' }} - {{ day.planned_end_time || '--:--' }}</a-descriptions-item>
               <a-descriptions-item label="当日费用">{{ day.daily_cost || 0 }} 元</a-descriptions-item>
             </a-descriptions>
 
@@ -101,7 +102,7 @@
                     <a-button size="small" :disabled="index === 0" @click="moveAttraction(day.day_index, index, -1)">上移</a-button>
                     <a-button size="small" :disabled="index === day.attractions.length - 1" @click="moveAttraction(day.day_index, index, 1)">下移</a-button>
                   </template>
-                  <a-list-item-meta :title="item.name" :description="`${item.address}｜${item.visit_duration}分钟｜门票 ${item.ticket_price || 0}元`" />
+                  <a-list-item-meta :title="item.name" :description="`${item.planned_arrival_time || '--:--'} 到达 · ${item.planned_departure_time || '--:--'} 离开｜${item.address}｜游玩 ${item.visit_duration} 分钟｜${item.opening_time && item.closing_time ? `${item.hours_source === 'category_estimate' ? '预计营业' : '营业'} ${item.opening_time}-${item.closing_time}` : '营业时间待确认'}｜门票 ${item.ticket_price || 0}元`" />
                 </a-list-item>
               </template>
             </a-list>
@@ -109,11 +110,21 @@
             <a-divider orientation="left">路线段</a-divider>
             <a-timeline>
               <a-timeline-item v-for="segment in day.route_segments" :key="`${segment.origin}-${segment.destination}`">
+                <div v-if="segment.planned_departure_time || segment.planned_arrival_time" class="route-time">
+                  {{ segment.planned_departure_time || '--:--' }} 出发 · {{ segment.planned_arrival_time || '--:--' }} 到达
+                </div>
                 {{ segment.origin }} → {{ segment.destination }}，
                 {{ routeTypeLabel(segment.route_type) }}，
                 {{ (segment.distance_meters / 1000).toFixed(1) }} km，
                 共 {{ segment.duration_minutes }} 分钟
-                <template v-if="segment.route_type === 'transit'">
+                <template
+                  v-if="
+                    segment.route_type === 'transit' &&
+                    (segment.steps?.length ||
+                      segment.transit_duration_minutes ||
+                      segment.walking_duration_minutes)
+                  "
+                >
                   （公交/地铁 {{ segment.transit_duration_minutes || 0 }} 分钟，
                   步行 {{ segment.walking_duration_minutes || 0 }} 分钟 / {{ ((segment.walking_distance_meters || 0) / 1000).toFixed(1) }} km）
                 </template>

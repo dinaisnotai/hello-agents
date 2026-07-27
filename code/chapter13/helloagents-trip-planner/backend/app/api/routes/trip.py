@@ -6,8 +6,10 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from ...agents.multi_agent_orchestrator import get_multi_agent_orchestrator
+from ...config import settings
 from ...models.schemas import ReplanRequest, TripPlanResponse, TripRequest
 from ...services.trip_conversation_service import get_trip_conversation_service
+from ...workflows.langgraph_trip_workflow import get_langgraph_trip_workflow
 
 router = APIRouter(prefix="/trip", tags=["Trip Planning"])
 logger = logging.getLogger("uvicorn.error")
@@ -20,8 +22,13 @@ logger = logging.getLogger("uvicorn.error")
 )
 async def plan_trip(request: TripRequest):
     try:
-        planner = get_multi_agent_orchestrator()
-        trip_plan = await run_in_threadpool(planner.plan_trip, request)
+        workflow_summary = None
+        if settings.workflow_mode.strip().lower() == "langgraph":
+            workflow = get_langgraph_trip_workflow()
+            trip_plan, workflow_summary = await run_in_threadpool(workflow.run, request)
+        else:
+            planner = get_multi_agent_orchestrator()
+            trip_plan = await run_in_threadpool(planner.plan_trip, request)
         conversation = get_trip_conversation_service()
         session = await run_in_threadpool(
             conversation.save_existing_plan,
@@ -34,6 +41,7 @@ async def plan_trip(request: TripRequest):
             data=trip_plan,
             session_id=session.id,
             plan_version=session.current_version,
+            workflow=workflow_summary,
         )
     except Exception as exc:
         logger.exception("Trip planning failed")

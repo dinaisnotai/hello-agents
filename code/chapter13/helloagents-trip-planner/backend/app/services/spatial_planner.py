@@ -30,6 +30,18 @@ def get_pace_profile(pace: str) -> PaceProfile:
     return PACE_PROFILES.get(pace, DEFAULT_PACE_PROFILE)
 
 
+def closing_time_priority(attraction: Attraction) -> int:
+    """Earlier published closing times should be visited earlier in the day."""
+
+    if not attraction.closing_time:
+        return 24 * 60
+    try:
+        hour, minute = attraction.closing_time.split(":", 1)
+        return int(hour) * 60 + int(minute)
+    except (TypeError, ValueError):
+        return 24 * 60
+
+
 def haversine_meters(left: Location, right: Location) -> float:
     """Return straight-line distance between two coordinates in meters."""
 
@@ -107,6 +119,7 @@ class SpatialItineraryPlanner:
         must_visit: Sequence[str],
         hotel_location: Optional[Location] = None,
         transportation: str = "公共交通",
+        daily_time_budget_minutes: Optional[int] = None,
     ) -> List[List[Attraction]]:
         if travel_days <= 0:
             return []
@@ -124,6 +137,15 @@ class SpatialItineraryPlanner:
             pace,
             hotel_location,
             transportation,
+            daily_time_budget_minutes or get_pace_profile(pace).daily_time_budget_minutes,
+        )
+        groups = self._rebalance_groups(
+            groups,
+            must_visit,
+            hotel_location,
+            transportation,
+            get_pace_profile(pace),
+            daily_time_budget_minutes or get_pace_profile(pace).daily_time_budget_minutes,
         )
         ordered_groups = [
             self._nearest_neighbor_order(group, must_visit, hotel_location)
@@ -163,6 +185,7 @@ class SpatialItineraryPlanner:
         pace: str,
         hotel_location: Optional[Location],
         transportation: str,
+        time_budget_minutes: int,
     ) -> List[List[Attraction]]:
         if not attractions:
             return []
@@ -202,7 +225,7 @@ class SpatialItineraryPlanner:
                         proposed_group, hotel_location, transportation, profile
                     )
                     if (
-                        timing.total_minutes > profile.daily_time_budget_minutes
+                        timing.total_minutes > time_budget_minutes
                         and not is_must_visit
                     ):
                         continue
@@ -219,6 +242,37 @@ class SpatialItineraryPlanner:
             groups[group_index].append(candidate)
             remaining.remove(candidate)
 
+        return groups
+
+    def _rebalance_groups(
+        self,
+        groups: List[List[Attraction]],
+        must_visit: Sequence[str],
+        hotel_location: Optional[Location],
+        transportation: str,
+        profile: PaceProfile,
+        time_budget_minutes: int,
+    ) -> List[List[Attraction]]:
+        """Avoid a heavily loaded day when a lighter day can accept an optional POI."""
+
+        while len(groups) > 1:
+            timings = [self.estimate_day_timing(group, hotel_location, transportation, profile) for group in groups]
+            donor_index = max(range(len(groups)), key=lambda index: timings[index].total_minutes)
+            target_index = min(range(len(groups)), key=lambda index: timings[index].total_minutes)
+            if timings[donor_index].total_minutes - timings[target_index].total_minutes < 90:
+                break
+            optional = [item for item in groups[donor_index] if not self._is_must_visit(item, must_visit)]
+            moved = False
+            for attraction in sorted(optional, key=lambda item: (item.visit_duration, item.score, item.name), reverse=True):
+                proposed = self._nearest_neighbor_order([*groups[target_index], attraction], must_visit, hotel_location)
+                if self.estimate_day_timing(proposed, hotel_location, transportation, profile).total_minutes > time_budget_minutes:
+                    continue
+                groups[donor_index].remove(attraction)
+                groups[target_index] = proposed
+                moved = True
+                break
+            if not moved:
+                break
         return groups
 
     def estimate_day_timing(
@@ -265,6 +319,7 @@ class SpatialItineraryPlanner:
             first = min(
                 remaining,
                 key=lambda item: (
+                    closing_time_priority(item),
                     haversine_meters(hotel_location, item.location),
                     self._priority_key(item, must_visit),
                 ),
@@ -279,6 +334,7 @@ class SpatialItineraryPlanner:
             nearest = min(
                 remaining,
                 key=lambda item: (
+                    closing_time_priority(item),
                     haversine_meters(current.location, item.location),
                     self._priority_key(item, must_visit),
                 ),
