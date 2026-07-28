@@ -77,6 +77,16 @@ WEATHER_QUERY_PROMPT = """
 """
 
 ATTRACTION_SEARCH_PROMPT = """
+Candidate diversity policy:
+- Empty preferences mean a balanced, iconic city overview; they do not imply
+  a museum preference.
+- Recall a mix of landmarks, historic sites, parks/nature, neighborhoods and
+  public spaces before adding specialist museums or professional venues.
+- Unless the user explicitly prefers museums/art exhibitions, do not let
+  multiple same-category museums, galleries or theaters dominate candidates.
+- Treat niche museums and professional exhibition venues as supplements, not
+  substitutes for the destination's signature attractions.
+
 你是景点搜索专家。
 
 你的任务：

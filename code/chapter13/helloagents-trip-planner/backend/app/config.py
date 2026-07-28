@@ -57,11 +57,11 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4"
 
-    # Embedding / vector retrieval configuration. These may point at any
-    # OpenAI-compatible embedding endpoint.
+    # Embedding / vector retrieval configuration for Volcengine Ark's
+    # ``/embeddings/multimodal`` endpoint.
     embedding_api_key: str = ""
     embedding_base_url: str = ""
-    embedding_model: str = "doubao-embedding-text-240515"
+    embedding_model: str = "doubao-embedding-vision-251215"
 
     # Workflow rollout. Keep the existing orchestrator as the safe default.
     workflow_mode: str = "legacy"

@@ -6,9 +6,10 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Optional, Set
-
+import logging
 from ..models.schemas import (
     Attraction,
+    CandidateScoreDebug,
     Budget,
     ConstraintItem,
     ConstraintReport,
@@ -18,18 +19,46 @@ from ..models.schemas import (
     Meal,
     POIInfo,
     PlanningTraceItem,
+    PlanReviewScores,
     ReplanRequest,
     RouteSegment,
+    ScheduleBlock,
     TripPlan,
     TripRequest,
     WeatherInfo,
 )
+from ..constraints.extractor import ConstraintExtractor
+from ..constraints.schema import (
+    ConstraintSet,
+    ConstraintType,
+    ValidationResult,
+)
+from ..constraints.validators import ConstraintValidationEngine
 from ..services.amap_service import AmapService, get_amap_service
+from ..services.attraction_scorer import AttractionScorer
 from ..services.place_name_service import normalize_place_name, place_names_match
+from ..services.planning_observability import (
+    build_planning_trace,
+    emit_planning_trace,
+    refresh_planning_trace,
+)
 from ..services.poi_category_service import POI_CATEGORY_LABELS, classify_poi
+from ..services.poi_metadata_service import (
+    build_preference_profile,
+    enrich_attraction,
+    enrich_poi,
+    get_city_classic_names,
+    preference_matches_categories,
+)
 from ..services.rag_service import TravelGuideRAG, get_travel_guide_rag
-from ..services.spatial_planner import SpatialItineraryPlanner, get_pace_profile
+from ..services.spatial_planner import (
+    SpatialItineraryPlanner,
+    estimate_leg,
+    get_pace_profile,
+    haversine_meters,
+)
 
+logger = logging.getLogger("uvicorn.error")
 
 @dataclass
 class _POICandidate:
@@ -40,6 +69,8 @@ class _POICandidate:
     categories: Set[str] = field(default_factory=set)
     is_must_visit: bool = False
     score: float = 0
+    recall_sources: Set[str] = field(default_factory=set)
+    score_breakdown: dict[str, float] = field(default_factory=dict)
 
 
 def _clock_minutes(value: str | None, default: int) -> int:
@@ -85,22 +116,52 @@ class POICollector:
         """Recall broadly, while keeping the source of every result explicit."""
 
         candidates: List[_POICandidate] = []
-        keywords = request.preferences or ["景点", "博物馆", "公园"]
+        keywords = request.preferences or [
+            "经典景点",
+            "城市地标",
+            "历史名胜",
+            "自然景观",
+        ]
         for keyword in keywords[:4]:
             for poi in self._safe_search(keyword, request.city):
+                poi = enrich_poi(poi, request.city)
                 candidates.append(
                     _POICandidate(
                         poi=poi,
                         matched_preferences={keyword},
                         categories=classify_poi(poi.name, poi.type),
+                        recall_sources={f"search:{keyword}"},
                     )
                 )
+
+        if request.city == "北京":
+            # First-time visitors need explicit classic recall; relying on a
+            # generic "museum" query over-represents niche venues.
+            for classic_name in (
+                "故宫",
+                "天坛",
+                "八达岭长城",
+                "颐和园",
+                "国家博物馆",
+                "景山",
+            ):
+                for poi in self._safe_search(classic_name, request.city):
+                    poi = enrich_poi(poi, request.city)
+                    if place_names_match(classic_name, poi.name):
+                        candidates.append(
+                            _POICandidate(
+                                poi=poi,
+                                categories=classify_poi(poi.name, poi.type),
+                                recall_sources={"classic_baseline"},
+                            )
+                        )
+                        break
 
         # Must-visits get a dedicated recall pass. A search result is only
         # promoted when its name actually matches what the user requested.
         for must_visit in request.must_visit:
             matches = [
-                poi
+                enrich_poi(poi, request.city)
                 for poi in self._safe_search(must_visit, request.city)
                 if place_names_match(must_visit, poi.name)
             ]
@@ -111,6 +172,7 @@ class POICollector:
                         poi=poi,
                         categories=classify_poi(poi.name, poi.type),
                         is_must_visit=True,
+                        recall_sources={"must_visit"},
                     )
                 )
 
@@ -130,7 +192,25 @@ class POICollector:
             candidate
             for candidate in candidates
             if not candidate.categories.intersection(request.avoid_categories)
+            and not self._is_meal_poi(candidate.poi)
         ]
+
+    @staticmethod
+    def _is_meal_poi(poi: POIInfo) -> bool:
+        text = f"{poi.name} {poi.type}".lower()
+        return any(
+            term in text
+            for term in (
+                "餐厅",
+                "餐馆",
+                "饭店",
+                "美食",
+                "小吃",
+                "咖啡",
+                "restaurant",
+                "food",
+            )
+        )
 
     def _deduplicate_candidates(self, candidates: List[_POICandidate]) -> List[_POICandidate]:
         """Merge duplicate IDs and aliases without losing must-visit metadata."""
@@ -148,6 +228,7 @@ class POICollector:
             existing.is_must_visit = existing.is_must_visit or candidate.is_must_visit
             existing.matched_preferences.update(candidate.matched_preferences)
             existing.categories.update(candidate.categories)
+            existing.recall_sources.update(candidate.recall_sources)
             if self._poi_quality(candidate.poi) > self._poi_quality(existing.poi):
                 existing.poi = candidate.poi
         return unique
@@ -155,12 +236,74 @@ class POICollector:
     def _score_candidates(
         self, candidates: List[_POICandidate], request: TripRequest
     ) -> List[_POICandidate]:
-        """Score only after invalid and duplicate tool results are gone."""
+        """按 基础质量 + 经典加成 + 偏好加分 - 小众扣分 四维打分。"""
+
+        classic_names = get_city_classic_names(request.city)
 
         for candidate in candidates:
-            candidate.score = self._score_poi(candidate.poi.name, candidate.poi.type or "", request)
+            meta = candidate.poi
+
+            # --- 是否在人工精选的经典名单中？ ---
+            is_curated = any(
+                curated_name in meta.name
+                for curated_name in classic_names
+            ) and meta.first_visit_priority >= 7
+            # --- 是否是非经典的小众博物馆？ ---
+            is_unknown_museum = (
+                "博物馆" in meta.name and not is_curated
+            )
+            # --- 用户偏好是否命中该POI的分类？ ---
+            # 合并两份来源：metadata.categories（精选名单里的人工分类）
+            # 和 classify_poi 结果（高德 type → 标准分类），任一命中即算匹配
+            metadata_cats = (
+                set(meta.categories) if meta.categories else set()
+            )
+            all_categories = metadata_cats | candidate.categories
+            pref_matched = preference_matches_categories(
+                request.preferences, all_categories
+            )
+
+            # 1. 基础质量分（0-60）：纯靠 popularity
+            base_quality = meta.popularity * 6
+
+            # 2. 经典加成（0 或 30）
+            classic_bonus = 30 if is_curated else 0
+
+            # 3. 偏好加分（0 或 10）
+            pref_bonus = 10 if pref_matched else 0
+
+            # 4. 小众博物馆扣分（0 或 -40）
+            niche_penalty = -40 if is_unknown_museum else 0
+
+            score = base_quality + classic_bonus + pref_bonus + niche_penalty
+            score = max(0, min(100, score))
+
             if candidate.is_must_visit:
-                candidate.score = max(candidate.score, 100)
+                score = max(score, 100)
+
+            candidate.score = score
+            candidate.score_breakdown = {
+                "base_quality": base_quality,
+                "classic_bonus": classic_bonus,
+                "pref_bonus": pref_bonus,
+                "niche_penalty": niche_penalty,
+                "is_curated": is_curated,
+            }
+
+        logger.info("========== 候选景点打分明细 ==========")
+        for c in candidates:
+            logger.info(
+                "景点: %s | is_must_visit=%s | score=%.1f | curated=%s | "
+                "base=%s classic=%s pref=%s niche=%s",
+                c.poi.name,
+                c.is_must_visit,
+                c.score,
+                c.score_breakdown.get("is_curated", False),
+                c.score_breakdown["base_quality"],
+                c.score_breakdown["classic_bonus"],
+                c.score_breakdown["pref_bonus"],
+                c.score_breakdown["niche_penalty"],
+            )
         return candidates
 
     def _select_candidates(
@@ -190,13 +333,23 @@ class POICollector:
             name=poi.name,
             address=poi.address,
             location=poi.location,
+            coordinates=poi.coordinates
+            or [poi.location.latitude, poi.location.longitude],
             visit_duration=self._duration_for(request.pace),
+            suggested_duration_minutes=poi.duration_minutes,
             description=description,
             category=poi.type,
+            categories=poi.categories,
+            area=poi.area,
+            popularity=poi.popularity,
+            first_visit_priority=poi.first_visit_priority,
+            crowd_level=poi.crowd_level,
             rating=poi.rating,
             poi_id=poi.id,
             ticket_price=poi.ticket_price,
             score=candidate.score,
+            recall_sources=sorted(candidate.recall_sources),
+            score_breakdown=candidate.score_breakdown,
             opening_hours=poi.opening_hours,
             opening_time=poi.opening_time,
             closing_time=poi.closing_time,
@@ -275,12 +428,6 @@ class RouteEvaluator:
     def build_day_routes(self, day: DayPlan, city: str) -> List[RouteSegment]:
         segments: List[RouteSegment] = []
         attractions = day.attractions
-        if day.transportation == "步行":
-            route_type = "walking"
-        elif any(label in day.transportation for label in ("公共", "公交", "地铁")):
-            route_type = "transit"
-        else:
-            route_type = "driving"
 
         route_nodes = [
             (item.name, item.address, item.location) for item in attractions
@@ -292,6 +439,17 @@ class RouteEvaluator:
         for origin, destination in zip(route_nodes, route_nodes[1:]):
             origin_name, origin_address, origin_location = origin
             destination_name, destination_address, destination_location = destination
+            leg_estimate = estimate_leg(
+                origin_location, destination_location, day.transportation
+            )
+            route_type = leg_estimate.mode
+            if (
+                route_type == "walking"
+                and day.max_walking_leg_minutes is not None
+                and leg_estimate.travel_minutes
+                > day.max_walking_leg_minutes
+            ):
+                route_type = "transit"
             route = self.amap_service.route_between_pois(
                 origin_name=origin_name,
                 origin_address=origin_address,
@@ -376,7 +534,7 @@ class ConstraintChecker:
                     passed=passed,
                     actual=f"{max_walk:.1f}km",
                     expected=f"不超过{request.max_daily_walk_km:.1f}km",
-                    severity="warning" if not passed else "info",
+                    severity="blocker" if not passed else "info",
                     message="步行强度可接受" if passed else "某天步行距离偏长，建议替换相邻景点或改用打车",
                 )
             )
@@ -437,6 +595,82 @@ class ConstraintChecker:
                     message="避开类型已满足" if passed else "候选过滤未完全生效，需要重新规划",
                 )
             )
+
+        count_violations = []
+        remote_solo_days = []
+        for day in plan.days:
+            count = len(day.attractions)
+            is_remote_solo = (
+                count == 1
+                and day.daily_travel_minutes
+                > SpatialItineraryPlanner.remote_travel_threshold_minutes
+            )
+            if is_remote_solo:
+                remote_solo_days.append(day.day_index + 1)
+            elif count and not 2 <= count <= 5:
+                count_violations.append(f"Day{day.day_index + 1}={count}个")
+        count_passed = not count_violations
+        items.append(
+            ConstraintItem(
+                name="每日景点数量",
+                passed=count_passed,
+                actual=(
+                    "每天2-5个景点"
+                    if count_passed and not remote_solo_days
+                    else (
+                        f"远距离单景点日：{', '.join(map(str, remote_solo_days))}"
+                        if count_passed
+                        else "; ".join(count_violations)
+                    )
+                ),
+                expected="通常每天2-5个景点；往返交通超过120分钟的远距离景点可单独成日",
+                severity=(
+                    "warning"
+                    if remote_solo_days or not count_passed
+                    else "info"
+                ),
+                message=(
+                    "每日景点数量合理"
+                    if count_passed and not remote_solo_days
+                    else "远距离景点交通成本较高，建议单独安排一天"
+                    if count_passed
+                    else "普通游览日景点过少，需要继续从当前区域按时间预算填充"
+                ),
+            )
+        )
+
+        low_utilization_days = [
+            day
+            for day in plan.days
+            if day.attractions
+            and day.day_utilization_score < 70
+            and not (
+                len(day.attractions) == 1
+                and day.daily_travel_minutes
+                > SpatialItineraryPlanner.remote_travel_threshold_minutes
+            )
+        ]
+        items.append(
+            ConstraintItem(
+                name="每日行程利用率",
+                passed=True,
+                actual=(
+                    "所有普通游览日达到70%"
+                    if not low_utilization_days
+                    else "; ".join(
+                        f"Day{day.day_index + 1}={day.day_utilization_score:.0f}%"
+                        for day in low_utilization_days
+                    )
+                ),
+                expected="普通游览日目标利用率70%-90%",
+                severity="warning" if low_utilization_days else "info",
+                message=(
+                    "每日时间利用充分"
+                    if not low_utilization_days
+                    else "部分日期仍有空余时间，可继续添加同区域景点"
+                ),
+            )
+        )
 
         if request.dietary_restrictions:
             meals = [meal for day in plan.days for meal in day.meals]
@@ -503,6 +737,33 @@ class ConstraintChecker:
                 )
             )
 
+        area_violations = []
+        for day in plan.days:
+            areas = sorted({item.area for item in day.attractions if item.area})
+            if len(areas) > 2:
+                area_violations.append(
+                    f"Day{day.day_index + 1}({', '.join(areas)})"
+                )
+        area_passed = not area_violations
+        items.append(
+            ConstraintItem(
+                name="每日区域聚合",
+                passed=area_passed,
+                actual=(
+                    "每天不超过2个区域"
+                    if area_passed
+                    else "; ".join(area_violations)
+                ),
+                expected="一天集中在1个主要区域，最多跨2个相邻区域",
+                severity="warning" if not area_passed else "info",
+                message=(
+                    "路线区域集中"
+                    if area_passed
+                    else "当天区域跳跃过多，需要移动或删除低优先级景点"
+                ),
+            )
+        )
+
         time_budget = daily_time_budget_minutes(request)
         use_actual_window = bool(request.daily_start_time and request.daily_end_time)
         longest_day = max(
@@ -545,7 +806,16 @@ class ConstraintChecker:
 
         passed_count = sum(1 for item in items if item.passed)
         return ConstraintReport(
-            passed=all(item.passed for item in items),
+            passed=all(
+                item.passed
+                or item.name
+                in {
+                    "每日景点数量",
+                    "每日区域聚合",
+                    "每日行程利用率",
+                }
+                for item in items
+            ),
             score=round(passed_count / len(items), 3),
             items=items,
         )
@@ -565,38 +835,219 @@ class PlannerReviewer:
         if bad_weather:
             warnings.append("天气存在降雨/恶劣风险，建议把室外景点和博物馆类景点互换。")
 
+        distance_score = self._distance_score(plan, request)
+        time_score = self._time_score(plan, request)
+        experience_score = self._experience_score(plan, request)
+        area_score = self._area_score(plan)
+        preference_score = self._preference_score(plan, request)
+        diversity_score = self._diversity_score(plan)
+        budget_score = self._budget_score(plan)
+        route_score = round(
+            experience_score * 0.3
+            + distance_score * 0.25
+            + time_score * 0.2
+            + area_score * 0.1
+            + diversity_score * 0.1
+            + budget_score * 0.05
+        )
+        review_warnings: List[str] = []
+        for day in plan.days:
+            if day.daily_distance_km > 35:
+                review_warnings.append(
+                    f"Day{day.day_index + 1}移动距离较长（{day.daily_distance_km:.1f}km）"
+                )
+            areas = {item.area for item in day.attractions if item.area}
+            if len(areas) > 2:
+                review_warnings.append(
+                    f"Day{day.day_index + 1}跨越{len(areas)}个区域"
+                )
+            if self._day_ratio(day, request) > 1:
+                review_warnings.append(
+                    f"Day{day.day_index + 1}超过每日可用时间"
+                )
+            if (
+                day.day_utilization_score < 70
+                and not (
+                    len(day.attractions) == 1
+                    and day.daily_travel_minutes
+                    > SpatialItineraryPlanner.remote_travel_threshold_minutes
+                )
+            ):
+                review_warnings.append(
+                    f"Day{day.day_index + 1}行程利用率仅"
+                    f"{day.day_utilization_score:.0f}%"
+                )
+            if (
+                len(day.attractions) == 1
+                and day.daily_travel_minutes
+                > SpatialItineraryPlanner.remote_travel_threshold_minutes
+            ):
+                review_warnings.append(
+                    f"Day{day.day_index + 1}为远距离景点日，"
+                    "附近没有可在时间预算内加入的候选景点"
+                )
+        plan.review_scores = PlanReviewScores(
+            score=route_score,
+            route_score=route_score,
+            distance_score=distance_score,
+            time_score=time_score,
+            experience_score=experience_score,
+            preference_score=preference_score,
+            diversity_score=diversity_score,
+            budget_score=budget_score,
+            score_breakdown={
+                "preference": preference_score,
+                "distance": distance_score,
+                "diversity": diversity_score,
+                "budget": budget_score,
+                "time": time_score,
+                "experience": experience_score,
+            },
+            warnings=sorted(set(review_warnings)),
+        )
+        warnings.extend(review_warnings)
         plan.risk_warnings = sorted(set(warnings))
         return plan
+
+    @staticmethod
+    def _day_ratio(day: DayPlan, request: TripRequest) -> float:
+        actual = (
+            day.daily_elapsed_minutes
+            if request.daily_start_time and request.daily_end_time
+            else day.daily_duration_minutes
+        )
+        return actual / max(1, daily_time_budget_minutes(request))
+
+    def _time_score(self, plan: TripPlan, request: TripRequest) -> int:
+        worst_ratio = max(
+            (self._day_ratio(day, request) for day in plan.days),
+            default=0,
+        )
+        if worst_ratio <= 0.85:
+            return 100
+        return max(0, round(100 - (worst_ratio - 0.85) * 154))
+
+    @staticmethod
+    def _distance_score(plan: TripPlan, request: TripRequest) -> int:
+        if not plan.days:
+            return 100
+        max_distance = max((day.daily_distance_km for day in plan.days), default=0)
+        max_walking = max(
+            (day.daily_walking_distance_km for day in plan.days), default=0
+        )
+        # A long but coherent suburban day is a warning, not automatically a
+        # bad route. Area jumping and walking overruns are penalized separately.
+        distance_score = max(
+            0, round(100 - max(0, max_distance - 12) * 0.5)
+        )
+        if request.max_daily_walk_km is not None and request.max_daily_walk_km >= 0:
+            walking_overrun = max(0, max_walking - request.max_daily_walk_km)
+            distance_score -= round(
+                min(40, walking_overrun * 10)
+            )
+        return max(0, distance_score)
+
+    @staticmethod
+    def _experience_score(plan: TripPlan, request: TripRequest) -> int:
+        attractions = [
+            attraction for day in plan.days for attraction in day.attractions
+        ]
+        if not attractions:
+            return 0
+        profile = build_preference_profile(request)
+        values = [
+            attraction.score
+            if attraction.score > 0
+            else attraction.popularity * 7
+            + (attraction.first_visit_priority * 3 if profile.first_visit else 0)
+            for attraction in attractions
+        ]
+        return max(0, min(100, round(sum(values) / len(values))))
+
+    @staticmethod
+    def _preference_score(plan: TripPlan, request: TripRequest) -> int:
+        attractions = [item for day in plan.days for item in day.attractions]
+        if not attractions:
+            return 0
+        if not request.preferences:
+            return 100
+        values = [
+            item.score_breakdown.get("preference_score", 0)
+            for item in attractions
+        ]
+        return max(0, min(100, round(sum(values) / len(values) / 35 * 100)))
+
+    @staticmethod
+    def _diversity_score(plan: TripPlan) -> int:
+        repeats = 0
+        for day in plan.days:
+            counts = {}
+            for item in day.attractions:
+                category = AttractionScorer.category_bucket(item)
+                counts[category] = counts.get(category, 0) + 1
+            repeats += sum(max(0, count - 1) for count in counts.values())
+        return max(0, 100 - repeats * 15)
+
+    @staticmethod
+    def _budget_score(plan: TripPlan) -> int:
+        attractions = [item for day in plan.days for item in day.attractions]
+        if not attractions:
+            return 100
+        penalty = sum(
+            -item.score_breakdown.get("budget_penalty", 0)
+            for item in attractions
+        ) / len(attractions)
+        return max(0, min(100, round(100 - penalty * 4)))
+
+    @staticmethod
+    def _area_score(plan: TripPlan) -> int:
+        penalties = []
+        for day in plan.days:
+            area_count = len({item.area for item in day.attractions if item.area})
+            penalties.append(max(0, area_count - 1) * 15)
+        return max(0, 100 - max(penalties, default=0))
 
 
 class MultiAgentTripPlanner:
     """Coordinates deterministic planner roles and optional local RAG evidence."""
 
-    max_planning_iterations = 5
+    max_planning_iterations = 3
 
     def __init__(self):
         self.amap_service = get_amap_service()
         self.rag = get_travel_guide_rag()
         self.poi_collector = POICollector(self.amap_service)
+        self.attraction_scorer = AttractionScorer()
         self.spatial_planner = SpatialItineraryPlanner()
         self.route_evaluator = RouteEvaluator(self.amap_service)
         self.budget_estimator = BudgetEstimator()
         self.constraint_checker = ConstraintChecker()
+        self.constraint_extractor = ConstraintExtractor()
+        self.constraint_validator = ConstraintValidationEngine()
         self.reviewer = PlannerReviewer()
 
-    def plan_trip(self, request: TripRequest) -> TripPlan:
+    def plan_trip(
+        self,
+        request: TripRequest,
+        *,
+        emit_observability: bool = True,
+    ) -> TripPlan:
         attractions = self.poi_collector.collect_attractions(request)
         hotel = self.poi_collector.collect_hotel(request)
         weather = self._weather_for_dates(request)
         evidence = self.rag.search(request.city, self.build_rag_query(request), top_k=5)
 
-        return self.build_plan_from_inputs(
+        plan = self.build_plan_from_inputs(
             request=request,
             attractions=attractions,
             hotel=hotel,
             weather=weather,
             evidence=evidence,
         )
+        refresh_planning_trace(plan, run_type="deterministic")
+        if emit_observability:
+            emit_planning_trace(plan.observability_trace)
+        return plan
 
     def build_plan_from_inputs(
         self,
@@ -605,23 +1056,222 @@ class MultiAgentTripPlanner:
         hotel: Hotel,
         weather: List[WeatherInfo],
         evidence: List[EvidenceSource],
+        constraint_set: ConstraintSet | None = None,
     ) -> TripPlan:
         """Build a plan from specialist outputs without searching again."""
 
+        constraint_set = constraint_set or self.constraint_extractor.extract(
+            request
+        )
+        effective_request = self._request_for_constraints(
+            request, constraint_set
+        )
+        profile = build_preference_profile(effective_request)
+        attractions = self.ensure_candidate_coverage(
+            effective_request, attractions
+        )
+        attractions = [
+            enrich_attraction(
+                deepcopy(attraction), effective_request, profile
+            )
+            for attraction in attractions
+        ]
+        attractions = self.attraction_scorer.score_candidates(
+            attractions,
+            effective_request,
+            hotel.location if hotel else None,
+            daily_time_budget_minutes(effective_request),
+        )
+        scored_candidates = list(attractions)
+        logger.info("========== 路线候选评分（最终） ==========")
+        for item in sorted(attractions, key=lambda item: (-item.score, item.name))[:12]:
+            logger.info(
+                "景点: %s | score=%.1f | base=%.1f | distance=%.1f | diversity=%.1f",
+                item.name,
+                item.score,
+                item.score_breakdown.get("selection_base_score", 0),
+                item.score_breakdown.get("distance_penalty", 0),
+                item.score_breakdown.get("diversity_penalty", 0),
+            )
+        attractions = self._filter_by_planning_constraints(
+            attractions, effective_request, constraint_set
+        )
         self._apply_conservative_opening_hours(attractions)
-        days = self._assign_days(request, attractions, hotel)
+        days = self._assign_days(
+            effective_request, attractions, hotel, constraint_set
+        )
         plan = TripPlan(
-            city=request.city,
-            start_date=request.start_date,
-            end_date=request.end_date,
+            city=effective_request.city,
+            start_date=effective_request.start_date,
+            end_date=effective_request.end_date,
             days=days,
             weather_info=weather,
             overall_suggestions=self._build_suggestions(request, evidence),
             evidence_sources=evidence,
             risk_warnings=[],
+            normalized_constraints=constraint_set.constraints,
+            candidate_debug=[
+                CandidateScoreDebug(
+                    name=item.name,
+                    category=AttractionScorer.category_bucket(item),
+                    tags=item.tags,
+                    score=item.score,
+                    score_breakdown=item.score_breakdown,
+                )
+                for item in sorted(
+                    attractions, key=lambda item: (-item.score, item.name)
+                )[:20]
+            ],
         )
-        plan = self._repair_until_stable(plan, request, attractions)
-        return self.reviewer.review(plan, request)
+        plan = self._repair_until_stable(
+            plan, effective_request, attractions
+        )
+        plan = self.reviewer.review(plan, effective_request)
+        if plan.review_scores.route_score < 70 or self._has_underfilled_day(
+            plan
+        ):
+            score_before = plan.review_scores.route_score / 100
+            self._repair_low_soft_score(
+                plan, effective_request, attractions
+            )
+            self._recalculate(plan, effective_request)
+            plan = self.reviewer.review(plan, effective_request)
+            plan.planning_trace.append(
+                PlanningTraceItem(
+                    iteration=len(plan.planning_trace),
+                    role="SoftReview",
+                    action="replan_low_quality_or_underfilled_day",
+                    reason=(
+                        "Re-ran deterministic daily filling because route "
+                        "quality was below 70 or a normal day was under 70% utilized"
+                    ),
+                    score_before=score_before,
+                    score_after=plan.review_scores.route_score / 100,
+                )
+            )
+        plan.observability_trace = build_planning_trace(
+            effective_request,
+            plan,
+            candidates=scored_candidates,
+            eligible_candidates=attractions,
+            run_type="deterministic_build",
+        )
+        return plan
+
+    def ensure_candidate_coverage(
+        self,
+        request: TripRequest,
+        specialist_candidates: List[Attraction],
+    ) -> List[Attraction]:
+        """Merge deterministic recall when LLM candidates are thin or biased.
+
+        Candidate count alone is not coverage: six museums are still a poor
+        pool for a neutral three-day Beijing trip. A classic baseline marker
+        proves that the deterministic landmark recall has already run.
+        """
+
+        unique = {
+            normalize_place_name(item.name): deepcopy(item)
+            for item in specialist_candidates
+        }
+        minimum = min(30, max(request.travel_days * 2, request.travel_days))
+        profile = build_preference_profile(request)
+        broad_classic_theme = preference_matches_categories(
+            request.preferences, {"historic", "culture"}
+        )
+        has_classic_baseline = any(
+            "classic_baseline" in item.recall_sources
+            for item in unique.values()
+        )
+        needs_supplement = (
+            len(unique) < minimum
+            or (
+                (profile.prefer_classic or broad_classic_theme)
+                and not has_classic_baseline
+            )
+        )
+        if not needs_supplement:
+            return list(unique.values())
+
+        recall_request = (
+            request.model_copy(update={"prefer_classic": True})
+            if broad_classic_theme and not profile.prefer_classic
+            else request
+        )
+        for recalled in self.poi_collector.collect_attractions(recall_request):
+            key = normalize_place_name(recalled.name)
+            existing = unique.get(key)
+            if existing is None:
+                unique[key] = recalled
+                continue
+            existing.recall_sources = sorted(
+                set([*existing.recall_sources, *recalled.recall_sources])
+            )
+        return sorted(
+            unique.values(),
+            key=lambda item: (
+                -item.score,
+                normalize_place_name(item.name),
+                item.poi_id or "",
+            ),
+        )
+
+    @staticmethod
+    def _request_for_constraints(
+        request: TripRequest, constraint_set: ConstraintSet
+    ) -> TripRequest:
+        updates = {}
+        daily_load = constraint_set.first(ConstraintType.DAILY_LOAD)
+        if daily_load and daily_load.value == "low":
+            updates["pace"] = "relaxed"
+        end_time = constraint_set.first(ConstraintType.DAILY_END_TIME)
+        if end_time and not request.daily_end_time:
+            updates["daily_end_time"] = str(end_time.value)
+        walking_distance = constraint_set.first(
+            ConstraintType.WALKING_DISTANCE
+        )
+        if (
+            walking_distance
+            and request.max_daily_walk_km is None
+        ):
+            updates["max_daily_walk_km"] = float(walking_distance.value)
+        return request.model_copy(update=updates) if updates else request
+
+    @staticmethod
+    def _filter_by_planning_constraints(
+        attractions: List[Attraction],
+        request: TripRequest,
+        constraint_set: ConstraintSet,
+    ) -> List[Attraction]:
+        avoid_high = any(
+            item.value == "high_intensity"
+            for item in constraint_set.get(
+                ConstraintType.AVOID_ACTIVITY
+            )
+        )
+        require_accessible = bool(
+            constraint_set.get(ConstraintType.ACCESSIBLE_ROUTE)
+        )
+        result = []
+        for attraction in attractions:
+            required = any(
+                place_names_match(name, attraction.name)
+                for name in request.must_visit
+            )
+            if (
+                avoid_high
+                and attraction.intensity_level == "high"
+                and not required
+            ):
+                continue
+            if (
+                require_accessible
+                and attraction.accessible is not True
+                and not required
+            ):
+                continue
+            result.append(attraction)
+        return result
 
     @staticmethod
     def _apply_conservative_opening_hours(attractions: List[Attraction]) -> None:
@@ -659,7 +1309,23 @@ class MultiAgentTripPlanner:
         self._recalculate(plan, request)
         if replan_request.notes:
             plan.risk_warnings.append(f"重规划备注：{replan_request.notes}")
-        return self.reviewer.review(plan, request)
+        plan = self.reviewer.review(plan, request)
+        if plan.observability_trace is None:
+            selected = [
+                item
+                for day in plan.days
+                for item in day.attractions
+            ]
+            plan.observability_trace = build_planning_trace(
+                request,
+                plan,
+                candidates=selected,
+                eligible_candidates=selected,
+                run_type="replan",
+            )
+        refresh_planning_trace(plan, run_type="replan")
+        emit_planning_trace(plan.observability_trace)
+        return plan
 
     def _repair_until_stable(
         self,
@@ -727,12 +1393,51 @@ class MultiAgentTripPlanner:
             self._recalculate_day(day, request)
         plan.route_segments = [segment for day in plan.days for segment in day.route_segments]
         plan.budget = self.budget_estimator.estimate(plan.days, request)
-        plan.constraint_report = self.constraint_checker.check(plan, request)
+        legacy_report = self.constraint_checker.check(plan, request)
+        constraint_set = (
+            ConstraintSet(constraints=plan.normalized_constraints)
+            if plan.normalized_constraints
+            else self.constraint_extractor.extract(request)
+            if hasattr(self, "constraint_extractor")
+            else ConstraintExtractor().extract(request)
+        )
+        validator = (
+            self.constraint_validator
+            if hasattr(self, "constraint_validator")
+            else ConstraintValidationEngine()
+        )
+        validation_result = validator.validate(plan, constraint_set)
+        plan.normalized_constraints = constraint_set.constraints
+        plan.validation_result = validation_result
+        generic_items = [
+            ConstraintItem(
+                name=f"Constraint:{violation.type}",
+                passed=False,
+                actual=str(violation.actual),
+                expected=str(violation.expected),
+                severity=(
+                    "blocker"
+                    if violation.severity == "hard"
+                    else "warning"
+                ),
+                message=violation.message,
+            )
+            for violation in validation_result.violations
+        ]
+        plan.constraint_report = ConstraintReport(
+            passed=legacy_report.passed and validation_result.valid,
+            score=round(
+                min(legacy_report.score, validation_result.score), 3
+            ),
+            items=[*legacy_report.items, *generic_items],
+        )
 
     def _recalculate_day(self, day: DayPlan, request: TripRequest) -> None:
         day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
         self._schedule_day_opening_hours(day, request)
-        self._update_day_metrics(day, request.pace)
+        self._update_day_metrics(
+            day, request.pace, daily_time_budget_minutes(request)
+        )
 
     def _apply_next_repair(
         self,
@@ -740,6 +1445,125 @@ class MultiAgentTripPlanner:
         request: TripRequest,
         available_attractions: List[Attraction],
     ) -> Optional[tuple[str, str]]:
+        hard_violations = [
+            item
+            for item in plan.validation_result.violations
+            if item.severity == "hard"
+        ]
+        activity_violation = next(
+            (
+                item
+                for item in hard_violations
+                if item.type in {"ACTIVITY_LEVEL", "ACCESSIBILITY"}
+                and item.poi_name
+            ),
+            None,
+        )
+        if activity_violation is not None:
+            for day in plan.days:
+                candidate = next(
+                    (
+                        item
+                        for item in day.attractions
+                        if item.name == activity_violation.poi_name
+                        and not any(
+                            place_names_match(required, item.name)
+                            for required in request.must_visit
+                        )
+                    ),
+                    None,
+                )
+                if candidate is not None:
+                    day.attractions.remove(candidate)
+                    return (
+                        "remove_constraint_violating_activity",
+                        activity_violation.message,
+                    )
+
+        rest_violation = next(
+            (
+                item
+                for item in hard_violations
+                if item.type == "REST_WINDOW" and item.day
+            ),
+            None,
+        )
+        if rest_violation is not None:
+            rest_constraint = next(
+                (
+                    item
+                    for item in plan.normalized_constraints
+                    if item.type == ConstraintType.TIME_WINDOW
+                    and item.reason == "rest"
+                ),
+                None,
+            )
+            if rest_constraint:
+                day = plan.days[rest_violation.day - 1]
+                day.schedule_blocks = self._schedule_blocks_for_constraints(
+                    ConstraintSet(constraints=[rest_constraint])
+                )
+                return (
+                    "insert_required_rest_window",
+                    rest_violation.message,
+                )
+
+        load_or_walk_violation = next(
+            (
+                item
+                for item in hard_violations
+                if item.type
+                in {
+                    "DAILY_LOAD",
+                    "WALKING_LIMIT",
+                    "WALKING_DURATION",
+                }
+                and item.day
+            ),
+            None,
+        )
+        if load_or_walk_violation is not None:
+            day = plan.days[load_or_walk_violation.day - 1]
+            optional = [
+                item
+                for item in day.attractions
+                if not any(
+                    place_names_match(required, item.name)
+                    for required in request.must_visit
+                )
+            ]
+            if optional:
+                removed = min(
+                    optional,
+                    key=lambda item: self._removal_priority(
+                        day, item, request
+                    ),
+                )
+                day.attractions.remove(removed)
+                return (
+                    "reduce_load_from_violation",
+                    (
+                        f"{load_or_walk_violation.message}; "
+                        f"removed {removed.name}"
+                    ),
+                )
+
+        transport_violation = next(
+            (
+                item
+                for item in hard_violations
+                if item.type == "TRANSPORT_MODE" and item.day
+            ),
+            None,
+        )
+        if transport_violation is not None:
+            day = plan.days[transport_violation.day - 1]
+            day.transportation = request.transportation
+            return (
+                "restore_required_transportation",
+                transport_violation.message,
+            )
+
         planned_names = [item.name for day in plan.days for item in day.attractions]
         missing = [
             name
@@ -826,6 +1650,59 @@ class MultiAgentTripPlanner:
                 f"Removed {attraction.name}; its scheduled visit is outside published opening hours",
             )
 
+        area_jump_days = [
+            day
+            for day in plan.days
+            if len({item.area for item in day.attractions if item.area}) > 2
+        ]
+        if area_jump_days:
+            donor_day = max(
+                area_jump_days,
+                key=lambda day: len(
+                    {item.area for item in day.attractions if item.area}
+                ),
+            )
+            optional = sorted(
+                (
+                    item
+                    for item in donor_day.attractions
+                    if not any(
+                        place_names_match(name, item.name)
+                        for name in request.must_visit
+                    )
+                ),
+                key=lambda item: self._removal_priority(
+                    donor_day, item, request
+                ),
+            )
+            for attraction in optional:
+                compatible_days = [
+                    day
+                    for day in plan.days
+                    if day is not donor_day
+                    and attraction.area
+                    and attraction.area
+                    in {item.area for item in day.attractions}
+                ]
+                for target_day in sorted(
+                    compatible_days, key=lambda day: day.day_index
+                ):
+                    if self._try_move_attraction(
+                        donor_day, target_day, attraction, request
+                    ):
+                        return (
+                            "move_area_outlier",
+                            f"Moved {attraction.name} to Day{target_day.day_index + 1} "
+                            f"to keep Day{donor_day.day_index + 1} geographically coherent",
+                        )
+            if optional:
+                attraction = optional[0]
+                donor_day.attractions.remove(attraction)
+                return (
+                    "remove_area_outlier",
+                    f"Removed low-priority area outlier {attraction.name}",
+                )
+
         if request.budget_limit is not None and plan.budget and plan.budget.total > request.budget_limit:
             optional = [
                 (day, attraction)
@@ -836,7 +1713,10 @@ class MultiAgentTripPlanner:
             if optional:
                 day, attraction = min(
                     optional,
-                    key=lambda item: (item[1].score, -item[1].ticket_price, item[1].name),
+                    key=lambda item: (
+                        *self._removal_priority(item[0], item[1], request),
+                        -item[1].ticket_price,
+                    ),
                 )
                 day.attractions.remove(attraction)
                 return (
@@ -883,7 +1763,9 @@ class MultiAgentTripPlanner:
                         for name in request.must_visit
                     )
                 ),
-                key=lambda attraction: (attraction.score, -attraction.visit_duration, attraction.name),
+                key=lambda attraction: self._removal_priority(
+                    donor_day, attraction, request
+                ),
             )
 
             # Evaluate both affected days with real routes. Adding only the
@@ -952,6 +1834,149 @@ class MultiAgentTripPlanner:
                     )
 
         return None
+
+    def _removal_priority(
+        self, day: DayPlan, attraction: Attraction, request: TripRequest
+    ) -> tuple:
+        """Low-value, remote, time-expensive optional POIs are removed first."""
+
+        anchors = [
+            item.location
+            for item in day.attractions
+            if item is not attraction
+        ]
+        if day.hotel and day.hotel.location:
+            anchors.append(day.hotel.location)
+        distance = min(
+            (
+                haversine_meters(attraction.location, anchor)
+                for anchor in anchors
+            ),
+            default=0,
+        )
+        return (
+            attraction.popularity,
+            attraction.first_visit_priority,
+            attraction.score,
+            -distance,
+            -attraction.visit_duration,
+            attraction.name,
+        )
+
+    @staticmethod
+    def _has_underfilled_day(plan: TripPlan) -> bool:
+        return any(
+            day.attractions
+            and (
+                day.day_utilization_score < 70
+                or len(day.attractions) < 2
+            )
+            and not (
+                len(day.attractions) == 1
+                and day.daily_travel_minutes
+                > SpatialItineraryPlanner.remote_travel_threshold_minutes
+            )
+            for day in plan.days
+        )
+
+    def _repair_low_soft_score(
+        self,
+        plan: TripPlan,
+        request: TripRequest,
+        available_attractions: List[Attraction],
+    ) -> None:
+        """One bounded deterministic replan when soft quality is below 70."""
+
+        planned_names = {
+            normalize_place_name(item.name)
+            for day in plan.days
+            for item in day.attractions
+        }
+        for day in sorted(plan.days, key=lambda item: item.day_index):
+            if (
+                (
+                    day.day_utilization_score >= 70
+                    and len(day.attractions) >= 2
+                )
+                or len(day.attractions)
+                >= SpatialItineraryPlanner.max_attractions_per_day
+                or (
+                    len(day.attractions) == 1
+                    and day.daily_travel_minutes
+                    > SpatialItineraryPlanner.remote_travel_threshold_minutes
+                )
+            ):
+                continue
+            day_areas = {item.area for item in day.attractions if item.area}
+            candidates = [
+                item
+                for item in available_attractions
+                if normalize_place_name(item.name) not in planned_names
+                and (
+                    not day_areas
+                    or item.area in day_areas
+                    or len(day_areas) < 2
+                )
+            ]
+            candidates.sort(
+                key=lambda item: (
+                    0 if item.area in day_areas else 1,
+                    self.spatial_planner._next_poi_rank(
+                        day.attractions,
+                        item,
+                        day.hotel.location
+                        if day.hotel and day.hotel.location
+                        else None,
+                        day.transportation,
+                        daily_time_budget_minutes(request),
+                    ),
+                )
+            )
+            for candidate in candidates:
+                if self._try_add_attraction(day, candidate, request):
+                    planned_names.add(normalize_place_name(candidate.name))
+                    self._recalculate_day(day, request)
+                    if day.day_utilization_score >= 70:
+                        break
+
+        for day in plan.days:
+            day.attractions = self.spatial_planner._beam_search_order(
+                day.attractions,
+                request.must_visit,
+                day.hotel.location if day.hotel else None,
+                day.transportation,
+                daily_time_budget_minutes(request),
+            )
+        worst_days = sorted(
+            plan.days,
+            key=lambda day: (
+                self.reviewer._day_ratio(day, request),
+                day.daily_distance_km,
+            ),
+            reverse=True,
+        )
+        for day in worst_days:
+            optional = [
+                item
+                for item in day.attractions
+                if not any(
+                    place_names_match(name, item.name)
+                    for name in request.must_visit
+                )
+            ]
+            if len(day.attractions) > 1 and optional and (
+                self.reviewer._day_ratio(day, request) > 1
+                or day.daily_distance_km > 35
+            ):
+                day.attractions.remove(
+                    min(
+                        optional,
+                        key=lambda item: self._removal_priority(
+                            day, item, request
+                        ),
+                    )
+                )
+                break
 
     def _try_move_attraction(
         self,
@@ -1055,7 +2080,13 @@ class MultiAgentTripPlanner:
         failures = [item.message or item.name for item in report.items if not item.passed]
         return "; ".join(failures) or "Planning stopped before all constraints could be satisfied"
 
-    def _assign_days(self, request: TripRequest, attractions: List[Attraction], hotel: Hotel) -> List[DayPlan]:
+    def _assign_days(
+        self,
+        request: TripRequest,
+        attractions: List[Attraction],
+        hotel: Hotel,
+        constraint_set: ConstraintSet | None = None,
+    ) -> List[DayPlan]:
         start_date = datetime.strptime(request.start_date, "%Y-%m-%d")
         if not hasattr(self, "spatial_planner"):
             self.spatial_planner = SpatialItineraryPlanner()
@@ -1068,24 +2099,75 @@ class MultiAgentTripPlanner:
             transportation=request.transportation,
             daily_time_budget_minutes=daily_time_budget_minutes(request),
         )
+        logger.info(
+            "========== 最终日程选点 ==========%s",
+            [
+                [f"{item.name}({item.score:.1f})" for item in group]
+                for group in daily_groups
+            ],
+        )
         days: List[DayPlan] = []
+        constraint_set = constraint_set or ConstraintExtractor().extract(
+            request
+        )
+        walking_duration = constraint_set.first(
+            ConstraintType.WALKING_DURATION
+        )
 
         for day_index in range(request.travel_days):
             current_date = start_date + timedelta(days=day_index)
             day_attractions = daily_groups[day_index]
+            areas = "、".join(
+                sorted({item.area for item in day_attractions if item.area})
+            )
             days.append(
                 DayPlan(
                     date=current_date.strftime("%Y-%m-%d"),
                     day_index=day_index,
-                    description=f"第{day_index + 1}天围绕{request.city}核心区域游览，节奏为{request.pace}。",
+                    description=(
+                        f"第{day_index + 1}天集中游览{areas or request.city + '核心区域'}，"
+                        f"节奏为{request.pace}。"
+                    ),
                     transportation=request.transportation,
                     accommodation=request.accommodation,
                     hotel=hotel,
                     attractions=day_attractions,
                     meals=self._build_meals(request, day_index),
+                    schedule_blocks=self._schedule_blocks_for_constraints(
+                        constraint_set
+                    ),
+                    max_walking_leg_minutes=(
+                        int(walking_duration.value)
+                        if walking_duration is not None
+                        else None
+                    ),
                 )
             )
         return days
+
+    @staticmethod
+    def _schedule_blocks_for_constraints(
+        constraint_set: ConstraintSet,
+    ) -> List[ScheduleBlock]:
+        blocks = []
+        for constraint in constraint_set.get(ConstraintType.TIME_WINDOW):
+            duration = int(constraint.value or 0)
+            start = _clock_minutes(constraint.start, 12 * 60)
+            window_end = _clock_minutes(constraint.end, start + duration)
+            end = min(window_end, start + duration)
+            blocks.append(
+                ScheduleBlock(
+                    type=(
+                        "rest"
+                        if constraint.reason == "rest"
+                        else "buffer"
+                    ),
+                    start_time=_format_clock(start),
+                    end_time=_format_clock(end),
+                    reason=constraint.reason,
+                )
+            )
+        return blocks
 
     def _schedule_day_opening_hours(self, day: DayPlan, request: TripRequest) -> None:
         """Calculate visit windows after routes are known and mark hard violations."""
@@ -1094,6 +2176,10 @@ class MultiAgentTripPlanner:
         start_minutes = current
         day.planned_start_time = _format_clock(current)
         incoming_by_destination = {segment.destination: segment for segment in day.route_segments}
+        pending_blocks = sorted(
+            day.schedule_blocks,
+            key=lambda block: _clock_minutes(block.start_time, 24 * 60),
+        )
         for attraction in day.attractions:
             incoming = incoming_by_destination.get(attraction.name)
             arrival = current + (incoming.duration_minutes if incoming else 0)
@@ -1103,6 +2189,20 @@ class MultiAgentTripPlanner:
             opening = _clock_minutes(attraction.opening_time, 0)
             start = max(arrival, opening) if attraction.opening_time else arrival
             departure = start + attraction.visit_duration
+            for block in list(pending_blocks):
+                block_start = _clock_minutes(block.start_time, 0)
+                block_end = _clock_minutes(block.end_time, block_start)
+                block_duration = max(0, block_end - block_start)
+                if start <= block_start < departure:
+                    # Long scenic visits may contain a seated lunch/rest stop.
+                    departure += block_duration
+                    pending_blocks.remove(block)
+                    break
+                if block_start <= start < block_end:
+                    start = block_end
+                    departure = start + attraction.visit_duration
+                    pending_blocks.remove(block)
+                    break
             closing = _clock_minutes(attraction.closing_time, 24 * 60)
             latest_entry = _clock_minutes(attraction.latest_entry_time, closing)
             attraction.planned_arrival_time = _format_clock(arrival)
@@ -1114,6 +2214,22 @@ class MultiAgentTripPlanner:
             else:
                 attraction.opening_hours_status = "open"
             current = departure
+        for block in pending_blocks:
+            block_start = _clock_minutes(block.start_time, 0)
+            block_end = _clock_minutes(block.end_time, block_start)
+            if current <= block_end:
+                current = max(current, block_end)
+        # Meals are placed flexibly between visits, but still consume real
+        # availability and therefore must move the computed return time.
+        if (
+            day.attractions
+            and day.meals
+            and not any(
+                block.reason == "rest"
+                for block in day.schedule_blocks
+            )
+        ):
+            current += min(60, get_pace_profile(request.pace).daily_buffer_minutes)
         if day.route_segments and day.attractions:
             return_segment = day.route_segments[-1]
             if return_segment.origin == day.attractions[-1].name:
@@ -1123,7 +2239,12 @@ class MultiAgentTripPlanner:
         day.planned_end_time = _format_clock(current)
         day.daily_elapsed_minutes = current - start_minutes
 
-    def _update_day_metrics(self, day: DayPlan, pace: str) -> None:
+    def _update_day_metrics(
+        self,
+        day: DayPlan,
+        pace: str,
+        available_time_minutes: Optional[int] = None,
+    ) -> None:
         profile = get_pace_profile(pace)
         day.daily_distance_km = round(
             sum(segment.distance_meters for segment in day.route_segments) / 1000, 2
@@ -1156,10 +2277,30 @@ class MultiAgentTripPlanner:
         day.daily_buffer_minutes = (
             profile.daily_buffer_minutes if day.attractions else 0
         )
+        # Meal time is explicitly exposed and is already included in the
+        # profile buffer, preserving the single-counted duration invariant.
+        day.daily_meal_minutes = (
+            min(60, day.daily_buffer_minutes) if day.meals else 0
+        )
         day.daily_duration_minutes = (
             day.daily_visit_minutes
             + day.daily_travel_minutes
             + day.daily_buffer_minutes
+        )
+        utilized_minutes = (
+            day.daily_elapsed_minutes
+            if day.daily_elapsed_minutes > 0
+            else day.daily_duration_minutes
+        )
+        day.day_utilization_score = round(
+            utilized_minutes
+            / max(
+                1,
+                available_time_minutes
+                or profile.daily_time_budget_minutes,
+            )
+            * 100,
+            1,
         )
         day.daily_cost = self._daily_cost(day)
 

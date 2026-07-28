@@ -1,0 +1,160 @@
+[
+  {
+    "name": "no_preference_beijing_trip",
+    "description": "Neutral baseline that should produce a balanced first-time Beijing itinerary.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-12",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "pace": "balanced",
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "low_transport_time": true,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "elderly_beijing_trip",
+    "description": "Senior travelers need short walking, no hiking, and an early return.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-13",
+      "travel_days": 4,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": ["historic", "park"],
+      "travelers": ["elderly"],
+      "pace": "relaxed",
+      "max_daily_walk_km": 5,
+      "daily_start_time": "09:00",
+      "daily_end_time": "18:00",
+      "hard_constraints": ["avoid hiking and high-intensity activities"]
+    },
+    "constraints": {
+      "walking_limit_km": 5,
+      "avoid_hiking": true,
+      "end_time": "18:00"
+    },
+    "quality_expectations": {
+      "low_transport_time": true,
+      "relaxed_pace": true,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "museum_lover_beijing_trip",
+    "description": "A museum-focused traveler should receive preference-aligned POIs.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-12",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": ["museum", "history"],
+      "pace": "balanced",
+      "must_visit": ["\u56fd\u5bb6\u535a\u7269\u9986"]
+    },
+    "constraints": {
+      "must_visit": ["\u56fd\u5bb6\u535a\u7269\u9986"]
+    },
+    "quality_expectations": {
+      "preference_alignment": true
+    }
+  },
+  {
+    "name": "food_lover_shanghai_trip",
+    "description": "Food interests should influence POI selection while preserving route quality.",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-12",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": ["food", "market", "shopping"],
+      "pace": "balanced",
+      "dietary_restrictions": ["no seafood"]
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "preference_alignment": true,
+      "low_transport_time": true
+    }
+  },
+  {
+    "name": "family_with_children_beijing_trip",
+    "description": "A family itinerary should include child-friendly, non-high-intensity activities.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-12",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "family hotel",
+      "preferences": ["park", "zoo", "interactive_activity"],
+      "travelers": ["two adults", "child"],
+      "pace": "relaxed"
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "family_friendly": true,
+      "relaxed_pace": true,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "tight_budget_beijing_trip",
+    "description": "A low-cost trip must stay within a strict total budget.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": ["park", "historic"],
+      "budget_limit": 1200,
+      "pace": "balanced"
+    },
+    "constraints": {
+      "budget_limit": 1200
+    },
+    "quality_expectations": {
+      "within_budget": true
+    }
+  },
+  {
+    "name": "relaxed_pace_hangzhou_trip",
+    "description": "A leisure traveler should have a lightly loaded itinerary.",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-12",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": ["natural", "park"],
+      "pace": "relaxed",
+      "daily_start_time": "09:30",
+      "daily_end_time": "19:00",
+      "must_visit": ["\u897f\u6e56"]
+    },
+    "constraints": {
+      "end_time": "19:00",
+      "must_visit": ["\u897f\u6e56"]
+    },
+    "quality_expectations": {
+      "relaxed_pace": true,
+      "low_transport_time": true
+    }
+  }
+]

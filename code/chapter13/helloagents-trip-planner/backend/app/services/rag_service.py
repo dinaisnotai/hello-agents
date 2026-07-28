@@ -38,7 +38,7 @@ class Embedder(Protocol):
 
 
 class OpenAICompatibleEmbedder:
-    """Calls an OpenAI-compatible ``POST /embeddings`` endpoint."""
+    """Calls Volcengine Ark's multimodal embedding endpoint for text vectors."""
 
     def __init__(self) -> None:
         self.api_key = (
@@ -66,15 +66,25 @@ class OpenAICompatibleEmbedder:
             )
 
         try:
-            response = httpx.post(
-                f"{self.base_url}/embeddings",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "input": list(texts)},
-                timeout=20.0,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            vectors = [item["embedding"] for item in payload["data"]]
+            # Ark treats ``input`` as content parts of one multimodal sample,
+            # not as a batch. Request one sample per RAG text.
+            vectors = []
+            for text in texts:
+                response = httpx.post(
+                    f"{self.base_url}/embeddings/multimodal",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    json={
+                        "model": self.model,
+                        "input": [{"type": "text", "text": text}],
+                    },
+                    timeout=20.0,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                vectors.append(payload["data"]["embedding"])
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             raise EmbeddingError(f"Embedding request failed: {exc}") from exc
 

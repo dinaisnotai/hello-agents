@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import os
 import sqlite3
@@ -19,7 +20,15 @@ from ..agents.agent_utils import parse_agent_result, run_stateless_agent
 from ..agents.multi_agent_orchestrator import MultiAgentOrchestrator, get_multi_agent_orchestrator
 from ..config import settings
 from ..models.agent_outputs import AttractionSearchResult, HotelSearchResult, WeatherQueryResult
-from ..models.schemas import EvidenceSource, Hotel, TripPlan, TripRequest, WorkflowExecutionSummary
+from ..models.schemas import Attraction, EvidenceSource, Hotel, TripPlan, TripRequest, WorkflowExecutionSummary
+from ..constraints.extractor import ConstraintExtractor
+from ..constraints.schema import ConstraintSet
+from ..services.place_name_service import normalize_place_name
+from ..services.planning_observability import (
+    build_planning_trace,
+    emit_planning_trace,
+    refresh_planning_trace,
+)
 from .planning_state import (
     ParseIntentInput,
     PlanningDraft,
@@ -39,7 +48,7 @@ class LangGraphTripWorkflow:
     """Stateful workflow that owns orchestration, not planning algorithms."""
 
     # Opening-hours repairs can precede a separate route/time-window repair.
-    max_repair_attempts = 5
+    max_repair_attempts = 3
 
     def __init__(
         self,
@@ -49,6 +58,7 @@ class LangGraphTripWorkflow:
         checkpointer: Any | None = None,
     ) -> None:
         self.orchestrator = orchestrator or get_multi_agent_orchestrator()
+        self.constraint_extractor = ConstraintExtractor()
         self._connection: sqlite3.Connection | None = None
         if checkpointer is None:
             path = Path(checkpoint_db_path) if checkpoint_db_path else self._default_checkpoint_path()
@@ -65,6 +75,7 @@ class LangGraphTripWorkflow:
     def _build_graph(self):
         graph = StateGraph(PlanningState)#每个node就是一个处理步骤 
         graph.add_node("parse_intent", self.parse_intent) #解析用户需求
+        graph.add_node("constraint_extractor", self.extract_constraints)
         graph.add_node("attraction", self.attraction)   #查景点
         graph.add_node("weather", self.weather) 
         graph.add_node("hotel", self.hotel)
@@ -77,10 +88,11 @@ class LangGraphTripWorkflow:
         graph.add_node("finalize", self.finalize)
 
         graph.add_edge(START, "parse_intent")   #edge可以把node连起来，这里一个parse_INTENT连了好几个node，并行
-        graph.add_edge("parse_intent", "attraction")
-        graph.add_edge("parse_intent", "weather")
-        graph.add_edge("parse_intent", "hotel")
-        graph.add_edge("parse_intent", "rag")
+        graph.add_edge("parse_intent", "constraint_extractor")
+        graph.add_edge("constraint_extractor", "attraction")
+        graph.add_edge("constraint_extractor", "weather")
+        graph.add_edge("constraint_extractor", "hotel")
+        graph.add_edge("constraint_extractor", "rag")
         graph.add_edge("attraction", "build_draft")
         graph.add_edge("weather", "build_draft")
         graph.add_edge("hotel", "build_draft")
@@ -90,7 +102,11 @@ class LangGraphTripWorkflow:
         graph.add_conditional_edges(
             "validate_constraints",
             self._next_after_validation,
-            {"repair": "bounded_repair", "review": "soft_review"},
+            {
+                "repair": "bounded_repair",
+                "review": "soft_review",
+                "finalize": "finalize",
+            },
         )
         graph.add_edge("bounded_repair", "validate_constraints")
         graph.add_edge("soft_review", "finalize")
@@ -107,6 +123,20 @@ class LangGraphTripWorkflow:
             config=config,
         )
         plan, summary = self._result_from_state(state, run_id, resumed=False)
+        if plan.observability_trace is None:
+            request_for_trace = TripRequest.model_validate(state["request"])
+            plan.observability_trace = build_planning_trace(
+                request_for_trace,
+                plan,
+                candidates=[
+                    Attraction.model_validate(item)
+                    for item in state.get("planning_candidates", [])
+                ],
+                run_id=run_id,
+                run_type="langgraph",
+            )
+        refresh_planning_trace(plan, run_id=run_id, run_type="langgraph")
+        emit_planning_trace(plan.observability_trace)
         logger.info(
             "[langgraph:%s] END status=%s degraded=%s errors=%d elapsed_ms=%.1f",
             run_id,
@@ -120,8 +150,34 @@ class LangGraphTripWorkflow:
     def resume(self, thread_id: str) -> tuple[TripPlan, WorkflowExecutionSummary]:
         """Continue a checkpointed graph after an external interruption."""
 
-        state = self.graph.invoke(None, config={"configurable": {"thread_id": thread_id}})
-        return self._result_from_state(state, thread_id, resumed=True)
+        state = self.graph.invoke(
+            None,
+            config={"configurable": {"thread_id": thread_id}},
+        )
+        plan, summary = self._result_from_state(
+            state,
+            thread_id,
+            resumed=True,
+        )
+        if plan.observability_trace is None:
+            request_for_trace = TripRequest.model_validate(state["request"])
+            plan.observability_trace = build_planning_trace(
+                request_for_trace,
+                plan,
+                candidates=[
+                    Attraction.model_validate(item)
+                    for item in state.get("planning_candidates", [])
+                ],
+                run_id=thread_id,
+                run_type="langgraph_resume",
+            )
+        refresh_planning_trace(
+            plan,
+            run_id=thread_id,
+            run_type="langgraph_resume",
+        )
+        emit_planning_trace(plan.observability_trace)
+        return plan, summary
 
     @staticmethod
     def _result_from_state(
@@ -183,6 +239,34 @@ class LangGraphTripWorkflow:
     def attraction(self, state: PlanningState) -> dict[str, Any]:
         return self._run_specialist("attraction", state, self.orchestrator.attraction_agent.run, AttractionSearchResult)
 
+    def extract_constraints(
+        self, state: PlanningState
+    ) -> dict[str, Any]:
+        request = TripRequest.model_validate(state["request"])
+        constraint_set = self.constraint_extractor.extract(request)
+        self._log(
+            state,
+            "constraint_extractor",
+            "completed",
+            (
+                f"constraints={len(constraint_set.constraints)} "
+                f"presets={constraint_set.applied_presets}"
+            ),
+        )
+        return {
+            "normalized_constraints": [
+                item.model_dump(mode="json")
+                for item in constraint_set.constraints
+            ],
+            "trace": [
+                self._trace(
+                    "constraint_extractor",
+                    "completed",
+                    f"constraints={len(constraint_set.constraints)}",
+                )
+            ],
+        }
+
     def weather(self, state: PlanningState) -> dict[str, Any]:
         return self._run_specialist("weather", state, self.orchestrator.weather_agent.run, WeatherQueryResult)
 
@@ -214,13 +298,35 @@ class LangGraphTripWorkflow:
 
     def deterministic_planning(self, state: PlanningState) -> dict[str, Any]:
         try:
+            start_time=perf_counter()
             request = TripRequest.model_validate(state["request"])
             attractions = AttractionSearchResult.model_validate(state.get("attraction_result", {}))
             weather = WeatherQueryResult.model_validate(state.get("weather_result", {}))
             hotels = HotelSearchResult.model_validate(state.get("hotel_result", {}))
             hotel = hotels.recommended_hotel or (hotels.candidates[0] if hotels.candidates else Hotel(name=f"{request.city} hotel", type=request.accommodation))
             evidence = [EvidenceSource.model_validate(item) for item in state.get("rag_results", [])]
-            plan = self.orchestrator.plan_builder.build_plan_from_inputs(request, attractions.attractions, hotel, weather.weather, evidence)
+            constraint_set = ConstraintSet(
+                constraints=state.get("normalized_constraints", [])
+            )
+            build_method = (
+                self.orchestrator.plan_builder.build_plan_from_inputs
+            )
+            kwargs = {}
+            if "constraint_set" in inspect.signature(
+                build_method
+            ).parameters:
+                kwargs["constraint_set"] = constraint_set
+            planning_candidates = self._expand_candidate_pool(
+                request, attractions.attractions
+            )
+            plan = build_method(
+                request,
+                planning_candidates,
+                hotel,
+                weather.weather,
+                evidence,
+                **kwargs,
+            )
             plan.risk_warnings = sorted(set([*plan.risk_warnings, *weather.risk_summary]))
             self._log(
                 state,
@@ -228,16 +334,48 @@ class LangGraphTripWorkflow:
                 "completed",
                 f"days={len(plan.days)} score={plan.constraint_report.score:.2f}",
             )
-            return {"deterministic_plan": plan.model_dump(mode="json"), "trace": [self._trace("deterministic_planning", "completed")]}
+            end_time=perf_counter()
+            logger.info(f"end_time-start_time={end_time-start_time:.2f}")
+            return {
+                "deterministic_plan": plan.model_dump(mode="json"),
+                "planning_candidates": [
+                    item.model_dump(mode="json")
+                    for item in planning_candidates
+                ],
+                "trace": [
+                    self._trace(
+                        "deterministic_planning",
+                        "completed",
+                        f"candidates={len(planning_candidates)}",
+                    )
+                ],
+            }
         except Exception as exc:
             self._log(state, "deterministic_planning", "failed", str(exc), warning=True)
+            end_time=perf_counter()
+            logger.info(f"fail end_time-start_time={end_time-start_time:.2f}")
             return {"errors": [self._error("deterministic_planning", exc)], "degraded_services": ["deterministic_planner"], "trace": [self._trace("deterministic_planning", "failed", str(exc))]}
 
     def validate_constraints(self, state: PlanningState) -> dict[str, Any]:
         plan = TripPlan.model_validate(state["deterministic_plan"])
-        event = "passed" if plan.constraint_report.passed else "failed"
-        self._log(state, "validate_constraints", event, f"score={plan.constraint_report.score:.2f}")
-        return {"trace": [self._trace("validate_constraints", event, f"score={plan.constraint_report.score}")]}
+        valid = plan.validation_result.valid and (
+            bool(plan.normalized_constraints)
+            or plan.constraint_report.passed
+        )
+        event = "passed" if valid else "failed"
+        detail = (
+            f"score={plan.validation_result.score:.2f} "
+            f"violations={len(plan.validation_result.violations)}"
+        )
+        self._log(state, "validate_constraints", event, detail)
+        return {
+            "validation_result": plan.validation_result.model_dump(
+                mode="json"
+            ),
+            "trace": [
+                self._trace("validate_constraints", event, detail)
+            ],
+        }
 
     def bounded_repair(self, state: PlanningState) -> dict[str, Any]:
         plan = TripPlan.model_validate(state["deterministic_plan"])
@@ -246,7 +384,12 @@ class LangGraphTripWorkflow:
             self._log(state, "bounded_repair", "limit_reached")
             return {"repair_count": attempt, "trace": [self._trace("bounded_repair", "limit_reached")]}
         request = TripRequest.model_validate(state["request"])
-        attractions = AttractionSearchResult.model_validate(state.get("attraction_result", {})).attractions
+        attractions = [
+            Attraction.model_validate(item)
+            for item in state.get("planning_candidates", [])
+        ] or AttractionSearchResult.model_validate(
+            state.get("attraction_result", {})
+        ).attractions
         action = self.orchestrator.plan_builder._apply_next_repair(plan, request, attractions)
         if action is not None:
             self.orchestrator.plan_builder._recalculate(plan, request)
@@ -268,14 +411,84 @@ class LangGraphTripWorkflow:
 
     def finalize(self, state: PlanningState) -> dict[str, Any]:
         plan = TripPlan.model_validate(state["deterministic_plan"])
-        self._log(state, "finalize", "completed", f"days={len(plan.days)}")
+        if not plan.validation_result.valid:
+            hard_messages = [
+                item.message
+                for item in plan.validation_result.violations
+                if item.severity == "hard"
+            ]
+            plan.failure_reason = plan.failure_reason or "; ".join(
+                hard_messages
+            )
+            plan.risk_warnings = sorted(
+                set(
+                    [
+                        *plan.risk_warnings,
+                        "行程存在未满足的硬约束，不能视为可执行方案。",
+                    ]
+                )
+            )
+        self._log(
+            state,
+            "finalize",
+            (
+                "completed"
+                if plan.validation_result.valid
+                else "hard_constraints_failed"
+            ),
+            f"days={len(plan.days)}",
+        )
         return {"final_plan": plan.model_dump(mode="json"), "trace": [self._trace("finalize", "completed")]}
 
     def _next_after_validation(self, state: PlanningState) -> str:
         plan = TripPlan.model_validate(state["deterministic_plan"])
-        if not plan.constraint_report.passed and state.get("repair_count", 0) < self.max_repair_attempts:
+        valid = plan.validation_result.valid and (
+            bool(plan.normalized_constraints)
+            or plan.constraint_report.passed
+        )
+        if not valid and state.get("repair_count", 0) < self.max_repair_attempts:
             return "repair"
-        return "review"
+        return "review" if valid else "finalize"
+
+    def _expand_candidate_pool(
+        self,
+        request: TripRequest,
+        specialist_candidates: list[Attraction],
+    ) -> list[Attraction]:
+        """Prevent a thin LLM result from making multi-day coverage impossible."""
+
+        coverage_method = getattr(
+            self.orchestrator.plan_builder,
+            "ensure_candidate_coverage",
+            None,
+        )
+        if coverage_method is not None:
+            return coverage_method(request, specialist_candidates)
+
+        unique = {
+            normalize_place_name(item.name): item
+            for item in specialist_candidates
+        }
+        minimum = min(30, max(request.travel_days * 2, request.travel_days))
+        if len(unique) >= minimum:
+            return list(unique.values())
+        collector = getattr(
+            self.orchestrator.plan_builder, "poi_collector", None
+        )
+        if collector is None:
+            return list(unique.values())
+        for attraction in collector.collect_attractions(request):
+            unique.setdefault(
+                normalize_place_name(attraction.name), attraction
+            )
+        return sorted(
+            unique.values(),
+            key=lambda item: (
+                -item.score,
+                normalize_place_name(item.name),
+                item.poi_id or "",
+            ),
+        )
 
     def _run_specialist(self, name: str, state: PlanningState, runner: Callable[[TripRequest], Any], result_type: type[Any]) -> dict[str, Any]:
         key = f"{name}_result"

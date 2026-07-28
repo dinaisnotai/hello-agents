@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..constraints.schema import Constraint, ValidationResult
 from ..services.city_name_service import normalize_city_name
+from .observability import PlanningRunTrace
 
 
 AvoidCategory = Literal[
@@ -53,6 +55,14 @@ class TripRequest(BaseModel):
     daily_end_time: Optional[str] = Field(default=None, description="Daily end time, HH:MM")
     hard_constraints: List[str] = Field(default_factory=list, description="Explicit hard constraints")
     soft_preferences: List[str] = Field(default_factory=list, description="Explicit soft preferences")
+    first_visit: Optional[bool] = Field(
+        default=None,
+        description="Whether this is the traveler's first visit to the destination",
+    )
+    prefer_classic: Optional[bool] = Field(
+        default=None,
+        description="Prefer iconic attractions over niche or specialist venues",
+    )
 
     @field_validator("city", mode="before")
     @classmethod
@@ -112,15 +122,47 @@ class Attraction(BaseModel):
     name: str
     address: str = ""
     location: Location
+    coordinates: List[float] = Field(
+        default_factory=list,
+        description="[latitude, longitude] planning coordinates",
+    )
     visit_duration: int = Field(default=120, description="Visit duration in minutes")
+    suggested_duration_minutes: Optional[int] = Field(
+        default=None,
+        ge=30,
+        description="Structured POI dwell-time metadata before pace adjustment",
+    )
     description: str = ""
     category: Optional[str] = Field(default="景点")
+    categories: List[str] = Field(
+        default_factory=list,
+        description="Normalized interest categories used by deterministic scoring",
+    )
+    tags: List[str] = Field(
+        default_factory=list,
+        description="Searchable interest tags used by attraction scoring",
+    )
+    area: str = Field(default="", description="Administrative or planning area")
+    popularity: int = Field(default=5, ge=0, le=10)
+    first_visit_priority: int = Field(default=5, ge=0, le=10)
+    crowd_level: int = Field(default=5, ge=0, le=10)
+    intensity_level: Literal["low", "medium", "high"] = "medium"
+    estimated_internal_walking_km: float = Field(default=0.5, ge=0)
+    accessible: Optional[bool] = None
     rating: Optional[float] = None
     photos: Optional[List[str]] = Field(default_factory=list)
     poi_id: Optional[str] = ""
     image_url: Optional[str] = None
     ticket_price: int = Field(default=0, ge=0)
     score: float = Field(default=0, description="Internal planning score")
+    recall_sources: List[str] = Field(
+        default_factory=list,
+        description="Auditable candidate-recall origins",
+    )
+    score_breakdown: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Explainable components of the deterministic POI score",
+    )
     opening_hours: str = ""
     opening_time: Optional[str] = None
     closing_time: Optional[str] = None
@@ -177,6 +219,13 @@ class RouteSegment(BaseModel):
     planned_arrival_time: Optional[str] = None
 
 
+class ScheduleBlock(BaseModel):
+    type: Literal["rest", "meal", "buffer"] = "rest"
+    start_time: str
+    end_time: str
+    reason: str = ""
+
+
 class DayPlan(BaseModel):
     date: str
     day_index: int
@@ -187,15 +236,26 @@ class DayPlan(BaseModel):
     attractions: List[Attraction] = Field(default_factory=list)
     meals: List[Meal] = Field(default_factory=list)
     route_segments: List[RouteSegment] = Field(default_factory=list)
+    schedule_blocks: List[ScheduleBlock] = Field(default_factory=list)
+    max_walking_leg_minutes: Optional[int] = Field(default=None, ge=0)
     daily_distance_km: float = 0
     daily_walking_distance_km: float = 0
     daily_visit_minutes: int = 0
     daily_travel_minutes: int = 0
     daily_buffer_minutes: int = 0
+    daily_meal_minutes: int = Field(
+        default=0,
+        description="Meal time included in daily_buffer_minutes",
+    )
     daily_duration_minutes: int = 0
     daily_elapsed_minutes: int = Field(
         default=0,
         description="Actual minutes from daily departure until return, excluding planning buffer",
+    )
+    day_utilization_score: float = Field(
+        default=0,
+        ge=0,
+        description="Scheduled visit, route and meal time as a percentage of daily availability",
     )
     daily_cost: int = 0
     planned_start_time: Optional[str] = None
@@ -248,6 +308,21 @@ class ConstraintReport(BaseModel):
     items: List[ConstraintItem] = Field(default_factory=list)
 
 
+class PlanReviewScores(BaseModel):
+    """Explainable 0-100 soft quality scores for the generated route."""
+
+    score: int = Field(default=100, ge=0, le=100)
+    route_score: int = Field(default=100, ge=0, le=100)
+    distance_score: int = Field(default=100, ge=0, le=100)
+    time_score: int = Field(default=100, ge=0, le=100)
+    experience_score: int = Field(default=100, ge=0, le=100)
+    preference_score: int = Field(default=100, ge=0, le=100)
+    diversity_score: int = Field(default=100, ge=0, le=100)
+    budget_score: int = Field(default=100, ge=0, le=100)
+    score_breakdown: Dict[str, float] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+
+
 class EvidenceSource(BaseModel):
     title: str
     city: str = ""
@@ -267,6 +342,16 @@ class PlanningTraceItem(BaseModel):
     score_after: float = Field(ge=0, le=1, description="Constraint score after the action")
 
 
+class CandidateScoreDebug(BaseModel):
+    """Top scored POI candidates retained for planning diagnostics."""
+
+    name: str
+    category: str = "general"
+    tags: List[str] = Field(default_factory=list)
+    score: float = 0
+    score_breakdown: Dict[str, float] = Field(default_factory=dict)
+
+
 class TripPlan(BaseModel):
     city: str
     start_date: str
@@ -280,7 +365,12 @@ class TripPlan(BaseModel):
     risk_warnings: List[str] = Field(default_factory=list)
     evidence_sources: List[EvidenceSource] = Field(default_factory=list)
     planning_trace: List[PlanningTraceItem] = Field(default_factory=list)
+    candidate_debug: List[CandidateScoreDebug] = Field(default_factory=list)
+    review_scores: PlanReviewScores = Field(default_factory=PlanReviewScores)
+    normalized_constraints: List[Constraint] = Field(default_factory=list)
+    validation_result: ValidationResult = Field(default_factory=ValidationResult)
     failure_reason: Optional[str] = None
+    observability_trace: Optional[PlanningRunTrace] = None
 
 
 class TripPlanResponse(BaseModel):
@@ -314,6 +404,10 @@ class POIInfo(BaseModel):
     type: str = "景点"
     address: str = ""
     location: Location
+    coordinates: List[float] = Field(
+        default_factory=list,
+        description="[latitude, longitude] planning coordinates",
+    )
     tel: Optional[str] = None
     rating: Optional[float] = None
     ticket_price: int = 0
@@ -322,6 +416,12 @@ class POIInfo(BaseModel):
     closing_time: Optional[str] = None
     latest_entry_time: Optional[str] = None
     hours_source: str = "unknown"
+    categories: List[str] = Field(default_factory=list)
+    area: str = ""
+    popularity: int = Field(default=5, ge=0, le=10)
+    first_visit_priority: int = Field(default=5, ge=0, le=10)
+    duration_minutes: Optional[int] = Field(default=None, ge=30)
+    crowd_level: int = Field(default=5, ge=0, le=10)
 
 
 class POISearchResponse(BaseModel):

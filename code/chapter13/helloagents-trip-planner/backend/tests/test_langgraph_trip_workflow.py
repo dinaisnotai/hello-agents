@@ -7,7 +7,15 @@ from app.models.agent_outputs import (
     HotelSearchResult,
     WeatherQueryResult,
 )
-from app.models.schemas import ConstraintReport, Hotel, TripPlan, TripRequest
+from app.agents.trip_planner_agent import MultiAgentTripPlanner
+from app.models.schemas import (
+    Attraction,
+    ConstraintReport,
+    Hotel,
+    Location,
+    TripPlan,
+    TripRequest,
+)
 from app.workflows.langgraph_trip_workflow import LangGraphTripWorkflow
 
 
@@ -138,6 +146,73 @@ class LangGraphTripWorkflowTest(unittest.TestCase):
         self.assertFalse(plan.constraint_report.passed)
         self.assertEqual(orchestrator.plan_builder.repairs, workflow.max_repair_attempts)
         self.assertEqual(summary.workflow_mode, "langgraph")
+
+    def test_thin_specialist_result_is_expanded_before_multiday_planning(self):
+        plan_builder = MultiAgentTripPlanner()
+        plan_builder.amap_service.settings.amap_api_key = ""
+        plan_builder.rag = _Rag()
+        orchestrator = type("Orchestrator", (), {})()
+        orchestrator.plan_builder = plan_builder
+        orchestrator.attraction_agent = _Specialist(
+            AttractionSearchResult(
+                attractions=[
+                    Attraction(
+                        name="故宫博物院",
+                        location=Location(
+                            longitude=116.397,
+                            latitude=39.916,
+                        ),
+                    )
+                ]
+            )
+        )
+        orchestrator.weather_agent = _Specialist(WeatherQueryResult())
+        orchestrator.hotel_agent = _Specialist(
+            HotelSearchResult(
+                candidates=[
+                    Hotel(
+                        name="测试酒店",
+                        location=Location(
+                            longitude=116.397,
+                            latitude=39.916,
+                        ),
+                    )
+                ]
+            )
+        )
+        orchestrator.planner_agent = _PlannerAgent()
+        workflow = self._workflow(orchestrator)
+        request = TripRequest(
+            city="北京",
+            start_date="2026-08-01",
+            end_date="2026-08-04",
+            travel_days=4,
+            transportation="公共交通",
+            accommodation="经济型酒店",
+            travelers=["senior"],
+            free_text_input="老人同行，中午需要休息",
+            daily_start_time="09:00",
+            daily_end_time="18:00",
+            max_daily_walk_km=5,
+            must_visit=["故宫"],
+            first_visit=True,
+        )
+
+        plan, _ = workflow.run(request, thread_id="thin-candidates")
+        state = workflow.graph.get_state(
+            {"configurable": {"thread_id": "thin-candidates"}}
+        )
+
+        self.assertEqual(len(plan.days), 4)
+        self.assertTrue(all(day.attractions for day in plan.days))
+        self.assertTrue(plan.validation_result.valid)
+        self.assertGreaterEqual(len(state.values["planning_candidates"]), 8)
+        self.assertFalse(
+            any(
+                "第2、3、4天空白" in warning
+                for warning in plan.risk_warnings
+            )
+        )
 
 
 if __name__ == "__main__":

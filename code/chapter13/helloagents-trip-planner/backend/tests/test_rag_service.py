@@ -1,6 +1,12 @@
 import unittest
+from unittest.mock import MagicMock, patch
 
-from app.services.rag_service import EmbeddingError, TravelGuideRAG
+from app.config import settings
+from app.services.rag_service import (
+    EmbeddingError,
+    OpenAICompatibleEmbedder,
+    TravelGuideRAG,
+)
 
 
 class FakeSemanticEmbedder:
@@ -68,6 +74,32 @@ class TravelGuideRAGTest(unittest.TestCase):
         self.assertTrue(results)
         self.assertTrue(all(item.city == "北京" for item in results))
         self.assertFalse(rag._vector_search_available)
+
+    @patch("app.services.rag_service.httpx.post")
+    def test_ark_multimodal_embedder_requests_each_text_separately(self, post):
+        response = MagicMock()
+        response.json.side_effect = [
+            {"data": {"embedding": [1.0, 2.0]}},
+            {"data": {"embedding": [3.0, 4.0]}},
+        ]
+        post.return_value = response
+
+        with (
+            patch.object(settings, "embedding_api_key", "test-key"),
+            patch.object(settings, "embedding_base_url", "https://ark.example/api/v3"),
+            patch.object(settings, "embedding_model", "doubao-embedding-vision-251215"),
+        ):
+            vectors = OpenAICompatibleEmbedder().embed(["first", "second"])
+
+        self.assertEqual(vectors, [[1.0, 2.0], [3.0, 4.0]])
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(
+            post.call_args_list[0].kwargs["json"],
+            {
+                "model": "doubao-embedding-vision-251215",
+                "input": [{"type": "text", "text": "first"}],
+            },
+        )
 
 
 if __name__ == "__main__":

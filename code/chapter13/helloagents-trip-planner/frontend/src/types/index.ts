@@ -7,15 +7,28 @@ export interface Attraction {
   name: string
   address: string
   location: Location
+  coordinates?: number[]
   visit_duration: number
+  suggested_duration_minutes?: number
   description: string
   category?: string
+  categories?: string[]
+  tags?: string[]
+  area?: string
+  popularity?: number
+  first_visit_priority?: number
+  crowd_level?: number
+  intensity_level?: 'low' | 'medium' | 'high'
+  estimated_internal_walking_km?: number
+  accessible?: boolean
   rating?: number
   photos?: string[]
   poi_id?: string
   image_url?: string
   ticket_price?: number
   score?: number
+  recall_sources?: string[]
+  score_breakdown?: Record<string, number>
   opening_hours?: string
   opening_time?: string
   closing_time?: string
@@ -123,13 +136,22 @@ export interface DayPlan {
   attractions: Attraction[]
   meals: Meal[]
   route_segments?: RouteSegment[]
+  schedule_blocks?: Array<{
+    type: 'rest' | 'meal' | 'buffer'
+    start_time: string
+    end_time: string
+    reason: string
+  }>
+  max_walking_leg_minutes?: number
   daily_distance_km?: number
   daily_walking_distance_km?: number
   daily_visit_minutes?: number
   daily_travel_minutes?: number
   daily_buffer_minutes?: number
+  daily_meal_minutes?: number
   daily_duration_minutes?: number
   daily_elapsed_minutes?: number
+  day_utilization_score?: number
   daily_cost?: number
   planned_start_time?: string
   planned_end_time?: string
@@ -158,6 +180,52 @@ export interface TripPlan {
   risk_warnings: string[]
   evidence_sources: EvidenceSource[]
   planning_trace: PlanningTraceItem[]
+  candidate_debug: Array<{
+    name: string
+    category: string
+    tags: string[]
+    score: number
+    score_breakdown: Record<string, number>
+  }>
+  review_scores: {
+    score: number
+    route_score: number
+    distance_score: number
+    time_score: number
+    experience_score: number
+    preference_score: number
+    diversity_score: number
+    budget_score: number
+    score_breakdown: Record<string, number>
+    warnings: string[]
+  }
+  normalized_constraints: Array<{
+    type: string
+    operator: string
+    value?: unknown
+    unit: string
+    start?: string
+    end?: string
+    reason: string
+    severity: 'hard' | 'soft'
+    source: string
+  }>
+  validation_result: {
+    valid: boolean
+    violations: Array<{
+      type: string
+      constraint_type: string
+      day?: number
+      message: string
+      actual?: unknown
+      expected?: unknown
+      severity: 'hard' | 'soft'
+      repair_hint: string
+      poi_name?: string
+    }>
+    checked_constraints: number
+    score: number
+  }
   failure_reason?: string
 }
 
@@ -189,6 +257,8 @@ export interface TripFormData {
   hotel_area?: string
   daily_start_time?: string
   daily_end_time?: string
+  first_visit?: boolean
+  prefer_classic?: boolean
 }
 
 export interface TripPlanResponse {

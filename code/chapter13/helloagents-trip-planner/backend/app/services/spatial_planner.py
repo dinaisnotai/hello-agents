@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..models.schemas import Attraction, Location
+from .attraction_scorer import AttractionScorer
 from .place_name_service import normalize_place_name, place_names_match
 
 
@@ -108,8 +109,53 @@ def estimate_travel_minutes(
     return math.ceil(distance / speed_meters_per_minute) + transfer_minutes
 
 
+@dataclass(frozen=True)
+class LegEstimate:
+    mode: str
+    travel_minutes: int
+    walking_meters: float
+    transfers: int
+
+
+def estimate_leg(
+    origin: Location, destination: Location, transportation: str
+) -> LegEstimate:
+    """Choose a sensible mode for one leg instead of copying a day-wide mode."""
+
+    distance = haversine_meters(origin, destination)
+    walking_minutes = math.ceil(distance / 69.0)
+    if distance < 1_500 or transportation == "步行":
+        return LegEstimate("walking", walking_minutes, distance, 0)
+
+    if any(label in transportation for label in ("公共", "公交", "地铁", "transit")):
+        # Long regional legs (for example central Beijing to Badaling) use
+        # express rail/coach speeds rather than inner-city bus speed.
+        transit_speed = 800.0 if distance > 30_000 else 333.0
+        transit_minutes = math.ceil(distance / transit_speed) + 15
+        if distance < 5_000 and walking_minutes <= transit_minutes:
+            return LegEstimate("walking", walking_minutes, distance, 0)
+        return LegEstimate(
+            "transit",
+            transit_minutes,
+            min(800.0, distance * 0.15),
+            1,
+        )
+
+    driving_minutes = math.ceil(distance / 500.0) + 10
+    if distance < 5_000 and walking_minutes <= driving_minutes:
+        return LegEstimate("walking", walking_minutes, distance, 0)
+    return LegEstimate("driving", driving_minutes, 0, 0)
+
+
 class SpatialItineraryPlanner:
     """Select high-priority POIs, cluster them by day, then order each day."""
+
+    max_attractions_per_day = 5
+    min_utilization_ratio = 0.70
+    target_utilization_ratio = 0.90
+    remote_travel_threshold_minutes = 120
+    remote_nearby_radius_meters = 20_000
+    attraction_scorer = AttractionScorer()
 
     def plan(
         self,
@@ -124,11 +170,32 @@ class SpatialItineraryPlanner:
         if travel_days <= 0:
             return []
 
-        selected = self.select_attractions(attractions, travel_days, pace, must_visit)
+        selected = self.select_attractions(
+            attractions,
+            travel_days,
+            pace,
+            must_visit,
+            # Candidate selection follows the requested pace. The hard
+            # maximum is enforced later while filling each day; using it here
+            # retained 15 candidates for a balanced 3-day trip and allowed
+            # low-value POIs to be selected merely to fill an area.
+            per_day_limit=get_pace_profile(pace).attractions_per_day,
+        )
         for attraction in selected:
-            attraction.visit_duration = estimate_visit_duration(
-                attraction.name, attraction.category or "", pace
-            )
+            if attraction.suggested_duration_minutes is not None:
+                pace_adjustment = {
+                    "relaxed": 30,
+                    "balanced": 0,
+                    "packed": -30,
+                }.get(pace, 0)
+                attraction.visit_duration = max(
+                    60,
+                    attraction.suggested_duration_minutes + pace_adjustment,
+                )
+            else:
+                attraction.visit_duration = estimate_visit_duration(
+                    attraction.name, attraction.category or "", pace
+                )
 
         groups = self._cluster_by_day(
             selected,
@@ -148,7 +215,14 @@ class SpatialItineraryPlanner:
             daily_time_budget_minutes or get_pace_profile(pace).daily_time_budget_minutes,
         )
         ordered_groups = [
-            self._nearest_neighbor_order(group, must_visit, hotel_location)
+            self._beam_search_order(
+                group,
+                must_visit,
+                hotel_location,
+                transportation,
+                daily_time_budget_minutes
+                or get_pace_profile(pace).daily_time_budget_minutes,
+            )
             for group in groups
         ]
         return ordered_groups + [[] for _ in range(travel_days - len(ordered_groups))]
@@ -159,6 +233,7 @@ class SpatialItineraryPlanner:
         travel_days: int,
         pace: str,
         must_visit: Sequence[str],
+        per_day_limit: Optional[int] = None,
     ) -> List[Attraction]:
         """Keep must-visits, then fill the pace capacity with top-scoring POIs."""
 
@@ -173,9 +248,125 @@ class SpatialItineraryPlanner:
 
         ranked = sorted(unique.values(), key=lambda item: self._priority_key(item, must_visit))
         must_visit_count = sum(self._is_must_visit(item, must_visit) for item in ranked)
-        pace_capacity = travel_days * get_pace_profile(pace).attractions_per_day
+        pace_capacity = travel_days * (
+            per_day_limit or get_pace_profile(pace).attractions_per_day
+        )
         selection_limit = max(pace_capacity, must_visit_count)
-        return ranked[:selection_limit]
+        required = [
+            item for item in ranked if self._is_must_visit(item, must_visit)
+        ]
+        optional = [
+            item for item in ranked if not self._is_must_visit(item, must_visit)
+        ]
+        selected = list(required)
+        # A low-score POI must not become a destination simply because it is
+        # in a separate area. Keep it only as a last-resort coverage fallback.
+        quality_optional = [
+            item
+            for item in optional
+            if item.score >= 60 or item.first_visit_priority >= 7
+        ]
+        low_quality_optional = [
+            item for item in optional if item not in quality_optional
+        ]
+        minimum_pool = min(selection_limit, max(travel_days, travel_days * 2))
+        optional = (
+            quality_optional
+            if len(required) + len(quality_optional) >= minimum_pool
+            else [*quality_optional, *low_quality_optional]
+        )
+        bucket_counts: Dict[str, int] = {}
+        for item in selected:
+            bucket = self._diversity_bucket(item)
+            bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+
+        # With no explicit matching preference, specialist cultural venues
+        # may supplement a trip but cannot consume most of the planning pool.
+        niche_cultural_cap = max(1, math.ceil(travel_days / 2))
+        deferred: List[Attraction] = []
+        while optional and len(selected) < selection_limit:
+            ranked_optional = sorted(
+                optional,
+                key=lambda item: (
+                    self._priority_key(item, must_visit)[1]
+                    + bucket_counts.get(self._diversity_bucket(item), 0) * 12,
+                    *self._priority_key(item, must_visit)[2:],
+                ),
+            )
+            chosen = None
+            for item in ranked_optional:
+                if (
+                    self._is_niche_cultural(item)
+                    and not self._has_explicit_preference_match(item)
+                    and sum(
+                        self._is_niche_cultural(existing)
+                        and not self._has_explicit_preference_match(existing)
+                        for existing in selected
+                    )
+                    >= niche_cultural_cap
+                ):
+                    deferred.append(item)
+                    optional.remove(item)
+                    continue
+                chosen = item
+                break
+            if chosen is None:
+                break
+            selected.append(chosen)
+            optional.remove(chosen)
+            bucket = self._diversity_bucket(chosen)
+            bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+
+        # Candidate starvation is worse than imperfect diversity. If the map
+        # provider returned almost nothing else, retain enough deferred POIs
+        # to make each day executable, without filling all capacity with them.
+        for item in deferred:
+            if len(selected) >= minimum_pool:
+                break
+            selected.append(item)
+        return sorted(
+            selected,
+            key=lambda item: self._priority_key(item, must_visit),
+        )
+
+    @staticmethod
+    def _has_explicit_preference_match(attraction: Attraction) -> bool:
+        return attraction.score_breakdown.get("preference_match", 0) > 0
+
+    @classmethod
+    def _is_niche_cultural(cls, attraction: Attraction) -> bool:
+        return (
+            cls._diversity_bucket(attraction)
+            in {"museum", "cultural_venue"}
+            and attraction.first_visit_priority <= 6
+        )
+
+    @staticmethod
+    def _diversity_bucket(attraction: Attraction) -> str:
+        categories = set(attraction.categories)
+        text = f"{attraction.name} {attraction.category or ''}"
+        if "museum" in categories or any(
+            term in text
+            for term in ("博物馆", "美术馆", "展览馆", "纪念馆", "科技馆")
+        ):
+            return "museum"
+        if any(
+            term in text
+            for term in ("剧院", "剧场", "艺术中心", "演艺中心")
+        ):
+            return "cultural_venue"
+        for category in (
+            "historic",
+            "natural",
+            "park",
+            "shopping",
+            "temple",
+            "amusement",
+            "zoo",
+        ):
+            if category in categories:
+                return category
+        return sorted(categories)[0] if categories else "general"
 
     def _cluster_by_day(
         self,
@@ -189,6 +380,18 @@ class SpatialItineraryPlanner:
     ) -> List[List[Attraction]]:
         if not attractions:
             return []
+
+        known_area_count = sum(bool(item.area) for item in attractions)
+        if known_area_count >= max(1, len(attractions) // 2):
+            return self._cluster_by_area(
+                attractions,
+                travel_days,
+                must_visit,
+                pace,
+                hotel_location,
+                transportation,
+                time_budget_minutes,
+            )
 
         active_days = min(travel_days, len(attractions))
         profile = get_pace_profile(pace)
@@ -244,6 +447,264 @@ class SpatialItineraryPlanner:
 
         return groups
 
+    def _cluster_by_area(
+        self,
+        attractions: Sequence[Attraction],
+        travel_days: int,
+        must_visit: Sequence[str],
+        pace: str,
+        hotel_location: Optional[Location],
+        transportation: str,
+        time_budget_minutes: int,
+    ) -> List[List[Attraction]]:
+        """Allocate explicit areas to days before optimizing within each day."""
+
+        buckets: Dict[str, List[Attraction]] = {}
+        for attraction in attractions:
+            area = attraction.area or self._nearest_known_area(attraction, attractions)
+            buckets.setdefault(area or "未标注区域", []).append(attraction)
+        for bucket in buckets.values():
+            bucket.sort(key=lambda item: self._priority_key(item, must_visit))
+
+        area_order = sorted(
+            buckets,
+            key=lambda area: (
+                min(self._priority_key(item, must_visit) for item in buckets[area]),
+                area,
+            ),
+        )
+        active_days = min(travel_days, len(attractions))
+        groups: List[List[Attraction]] = [[] for _ in range(active_days)]
+        group_areas: List[set[str]] = [set() for _ in range(active_days)]
+        profile = get_pace_profile(pace)
+
+        # Give the strongest areas their own day first.
+        for index, area in enumerate(area_order[:active_days]):
+            groups[index].append(buckets[area].pop(0))
+            group_areas[index].add(area)
+
+        # When there are fewer areas than travel days, split a large area
+        # across multiple days instead of leaving a day empty.
+        for day_index in range(len(area_order), active_days):
+            splittable = [area for area in area_order if buckets[area]]
+            if not splittable:
+                break
+            area = min(
+                splittable,
+                key=lambda item: (
+                    self._priority_key(buckets[item][0], must_visit),
+                    -len(buckets[item]),
+                    item,
+                ),
+            )
+            groups[day_index].append(buckets[area].pop(0))
+            group_areas[day_index].add(area)
+
+        remaining = sorted(
+            (
+                (area, attraction)
+                for area in area_order
+                for attraction in buckets[area]
+            ),
+            key=lambda pair: self._priority_key(pair[1], must_visit),
+        )
+
+        # Phase 1: fill the day's primary area first. This prevents a slightly
+        # higher-scoring cross-city POI from consuming the time needed for
+        # nearby attractions such as Summer Palace + Old Summer Palace.
+        assigned_ids = set()
+        for day_index, group in enumerate(groups):
+            if not group:
+                continue
+            primary_area = next(iter(group_areas[day_index]))
+            primary_candidates = [
+                attraction
+                for area, attraction in remaining
+                if area == primary_area
+            ]
+            while (
+                primary_candidates
+                and len(groups[day_index]) < self.max_attractions_per_day
+            ):
+                current_visit = sum(
+                    item.visit_duration for item in groups[day_index]
+                )
+                if (
+                    current_visit / max(1, time_budget_minutes)
+                    >= self.target_utilization_ratio
+                ):
+                    break
+                feasible = []
+                for attraction in primary_candidates:
+                    proposed = self._beam_search_order(
+                        [*groups[day_index], attraction],
+                        must_visit,
+                        hotel_location,
+                        transportation,
+                        time_budget_minutes,
+                    )
+                    timing = self.estimate_day_timing(
+                        proposed, hotel_location, transportation, profile
+                    )
+                    if timing.total_minutes <= time_budget_minutes:
+                        feasible.append(
+                            (
+                                self._next_poi_rank(
+                                    groups[day_index],
+                                    attraction,
+                                    hotel_location,
+                                    transportation,
+                                    time_budget_minutes,
+                                ),
+                                proposed,
+                                attraction,
+                            )
+                        )
+                if not feasible:
+                    break
+                _, proposed, attraction = min(feasible, key=lambda item: item[0])
+                groups[day_index] = proposed
+                assigned_ids.add(id(attraction))
+                primary_candidates.remove(attraction)
+
+        remaining = [
+            pair for pair in remaining if id(pair[1]) not in assigned_ids
+        ]
+
+        # Phase 2: only under-filled days may adopt a second area. Remote days
+        # accept additions only when the POI is genuinely nearby.
+        for area, attraction in remaining:
+            is_required = self._is_must_visit(attraction, must_visit)
+            candidates = []
+            for day_index, group in enumerate(groups):
+                proposed_areas = group_areas[day_index] | {area}
+                if len(proposed_areas) > 2 and not is_required:
+                    continue
+                if (
+                    len(group) >= self.max_attractions_per_day
+                    and not is_required
+                ):
+                    continue
+                utilization = sum(
+                    item.visit_duration for item in group
+                ) / max(1, time_budget_minutes)
+                if utilization >= self.min_utilization_ratio and not is_required:
+                    continue
+                current_timing = self.estimate_day_timing(
+                    group, hotel_location, transportation, profile
+                )
+                if (
+                    current_timing.travel_minutes
+                    > self.remote_travel_threshold_minutes
+                    and group
+                    and haversine_meters(
+                        attraction.location, self._centroid(group)
+                    )
+                    > self.remote_nearby_radius_meters
+                    and not is_required
+                ):
+                    continue
+                proposed = self._beam_search_order(
+                    [*group, attraction],
+                    must_visit,
+                    hotel_location,
+                    transportation,
+                    time_budget_minutes,
+                )
+                timing = self.estimate_day_timing(
+                    proposed, hotel_location, transportation, profile
+                )
+                if timing.total_minutes > time_budget_minutes and not is_required:
+                    continue
+                same_area_penalty = 0 if area in group_areas[day_index] else 1
+                candidates.append(
+                    (
+                        same_area_penalty,
+                        len(proposed_areas),
+                        self._next_poi_rank(
+                            group,
+                            attraction,
+                            hotel_location,
+                            transportation,
+                            time_budget_minutes,
+                        ),
+                        day_index,
+                        proposed,
+                    )
+                )
+            if not candidates:
+                continue
+            *_, day_index, proposed = min(candidates)
+            groups[day_index] = proposed
+            group_areas[day_index].add(area)
+        return groups
+
+    def _next_poi_rank(
+        self,
+        current_group: Sequence[Attraction],
+        attraction: Attraction,
+        hotel_location: Optional[Location],
+        transportation: str,
+        time_budget_minutes: int,
+    ) -> tuple:
+        """Rank a fill candidate by value, distance, walking and transfers."""
+
+        origin = (
+            current_group[-1].location
+            if current_group
+            else hotel_location or attraction.location
+        )
+        leg = estimate_leg(origin, attraction.location, transportation)
+        value = self.attraction_scorer.route_increment_score(
+            attraction,
+            current_group,
+            origin,
+            time_budget_minutes,
+        ) / 100
+        time_cost = leg.travel_minutes / max(1, time_budget_minutes)
+        walking_cost = leg.walking_meters / 8_000
+        transfer_cost = leg.transfers
+        bucket = self._diversity_bucket(attraction)
+        repeated_category_count = sum(
+            self._diversity_bucket(item) == bucket
+            for item in current_group
+        )
+        diversity_cost = repeated_category_count * 0.08
+        if (
+            self._is_niche_cultural(attraction)
+            and any(self._is_niche_cultural(item) for item in current_group)
+            and not self._has_explicit_preference_match(attraction)
+        ):
+            diversity_cost += 0.2
+        score = (
+            value * 0.4
+            - time_cost * 0.3
+            - walking_cost * 0.2
+            - transfer_cost * 0.1
+            - diversity_cost
+        )
+        return (
+            -score,
+            -attraction.first_visit_priority,
+            -attraction.popularity,
+            attraction.name,
+        )
+
+    @staticmethod
+    def _nearest_known_area(
+        attraction: Attraction, attractions: Sequence[Attraction]
+    ) -> str:
+        known = [item for item in attractions if item.area and item is not attraction]
+        if not known:
+            return ""
+        return min(
+            known,
+            key=lambda item: (
+                haversine_meters(attraction.location, item.location),
+                item.area,
+            ),
+        ).area
+
     def _rebalance_groups(
         self,
         groups: List[List[Attraction]],
@@ -264,7 +725,26 @@ class SpatialItineraryPlanner:
             optional = [item for item in groups[donor_index] if not self._is_must_visit(item, must_visit)]
             moved = False
             for attraction in sorted(optional, key=lambda item: (item.visit_duration, item.score, item.name), reverse=True):
-                proposed = self._nearest_neighbor_order([*groups[target_index], attraction], must_visit, hotel_location)
+                target_areas = {
+                    item.area for item in groups[target_index] if item.area
+                }
+                donor_areas = {
+                    item.area for item in groups[donor_index] if item.area
+                }
+                if (
+                    attraction.area
+                    and target_areas
+                    and attraction.area not in target_areas
+                    and len(donor_areas) <= 2
+                ):
+                    continue
+                proposed = self._beam_search_order(
+                    [*groups[target_index], attraction],
+                    must_visit,
+                    hotel_location,
+                    transportation,
+                    time_budget_minutes,
+                )
                 if self.estimate_day_timing(proposed, hotel_location, transportation, profile).total_minutes > time_budget_minutes:
                     continue
                 groups[donor_index].remove(attraction)
@@ -287,16 +767,16 @@ class SpatialItineraryPlanner:
 
         visit_minutes = sum(item.visit_duration for item in attractions)
         travel_minutes = sum(
-            estimate_travel_minutes(left.location, right.location, transportation)
+            estimate_leg(left.location, right.location, transportation).travel_minutes
             for left, right in zip(attractions, attractions[1:])
         )
         if hotel_location is not None:
-            travel_minutes += estimate_travel_minutes(
+            travel_minutes += estimate_leg(
                 hotel_location, attractions[0].location, transportation
-            )
-            travel_minutes += estimate_travel_minutes(
+            ).travel_minutes
+            travel_minutes += estimate_leg(
                 attractions[-1].location, hotel_location, transportation
-            )
+            ).travel_minutes
         return DayTiming(
             visit_minutes=visit_minutes,
             travel_minutes=travel_minutes,
@@ -342,6 +822,103 @@ class SpatialItineraryPlanner:
             ordered.append(nearest)
             remaining.remove(nearest)
         return ordered
+
+    def _beam_search_order(
+        self,
+        attractions: Sequence[Attraction],
+        must_visit: Sequence[str],
+        hotel_location: Optional[Location],
+        transportation: str,
+        time_budget_minutes: int,
+        beam_width: int = 12,
+    ) -> List[Attraction]:
+        """Optimize a small daily route with a bounded, deterministic beam."""
+
+        if len(attractions) <= 1:
+            return list(attractions)
+        ranked = sorted(attractions, key=lambda item: self._priority_key(item, must_visit))
+        # state: (ordered, remaining, travel minutes, walk meters, transfers)
+        beam = [([], ranked, 0, 0.0, 0)]
+        while beam and beam[0][1]:
+            expanded = []
+            for ordered, remaining, travel, walk, transfers in beam:
+                origin = ordered[-1].location if ordered else hotel_location
+                for candidate in remaining:
+                    leg = (
+                        estimate_leg(origin, candidate.location, transportation)
+                        if origin is not None
+                        else LegEstimate("walking", 0, 0, 0)
+                    )
+                    next_ordered = [*ordered, candidate]
+                    next_remaining = [item for item in remaining if item is not candidate]
+                    expanded.append(
+                        (
+                            next_ordered,
+                            next_remaining,
+                            travel + leg.travel_minutes,
+                            walk + leg.walking_meters,
+                            transfers + leg.transfers,
+                        )
+                    )
+            beam = sorted(
+                expanded,
+                key=lambda state: (
+                    -self._partial_route_score(
+                        state[0],
+                        state[2],
+                        state[3],
+                        state[4],
+                        time_budget_minutes,
+                    ),
+                    tuple(item.name for item in state[0]),
+                ),
+            )[:beam_width]
+
+        completed = []
+        for ordered, remaining, travel, walk, transfers in beam:
+            if hotel_location is not None and ordered:
+                leg = estimate_leg(
+                    ordered[-1].location, hotel_location, transportation
+                )
+                travel += leg.travel_minutes
+                walk += leg.walking_meters
+                transfers += leg.transfers
+            completed.append(
+                (
+                    -self._partial_route_score(
+                        ordered, travel, walk, transfers, time_budget_minutes
+                    ),
+                    tuple(item.name for item in ordered),
+                    ordered,
+                )
+            )
+        return min(completed)[2] if completed else ranked
+
+    @staticmethod
+    def _partial_route_score(
+        ordered: Sequence[Attraction],
+        travel_minutes: int,
+        walking_meters: float,
+        transfers: int,
+        time_budget_minutes: int,
+    ) -> float:
+        if not ordered:
+            return 0
+        value = sum(item.score for item in ordered) / (100 * len(ordered))
+        travel_penalty = min(1.0, travel_minutes / max(1, time_budget_minutes))
+        walk_penalty = min(1.0, walking_meters / 8_000)
+        transfer_penalty = min(1.0, transfers / max(1, len(ordered)))
+        closing_penalty = sum(
+            closing_time_priority(left) > closing_time_priority(right)
+            for left, right in zip(ordered, ordered[1:])
+        ) / max(1, len(ordered) - 1)
+        return (
+            value * 0.4
+            - travel_penalty * 0.3
+            - walk_penalty * 0.2
+            - transfer_penalty * 0.1
+            - closing_penalty * 0.2
+        )
 
     def _priority_key(
         self, attraction: Attraction, must_visit: Sequence[str]

@@ -80,7 +80,10 @@ class PlanningState(TypedDict, total=False):
     run_id: str
     request: dict[str, Any]
     intent: dict[str, Any]
+    normalized_constraints: list[dict[str, Any]]
+    validation_result: dict[str, Any]
     attraction_result: dict[str, Any]
+    planning_candidates: list[dict[str, Any]]
     weather_result: dict[str, Any]
     hotel_result: dict[str, Any]
     rag_results: list[dict[str, Any]]

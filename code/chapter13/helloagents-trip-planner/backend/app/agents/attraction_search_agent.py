@@ -46,6 +46,8 @@ class AttractionSearchAgent:
             "must_visit": request.must_visit,
             "avoid_categories": request.avoid_categories,
             "pace": request.pace,
+            "first_visit": request.first_visit,
+            "prefer_classic": request.prefer_classic,
         }
 
         if self.agent is not None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import os
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -16,6 +17,11 @@ from pydantic import BaseModel
 from ..models.schemas import ReplanRequest, TripPlan, TripRequest
 from ..services.amap_service import AmapService, get_amap_service
 from ..services.llm_service import get_llm
+from ..services.planning_observability import (
+    build_planning_trace,
+    emit_planning_trace,
+    refresh_planning_trace,
+)
 from .attraction_search_agent import AttractionSearchAgent
 from .hotel_agent import HotelAgent
 from .planner_agent import PlannerAgent
@@ -189,7 +195,13 @@ class MultiAgentOrchestrator:
                 "rebuilding with deterministic POICollector",
                 run_id,
             )
-            plan = self.plan_builder.plan_trip(request)
+            fallback_method = self.plan_builder.plan_trip
+            fallback_kwargs = {}
+            if "emit_observability" in inspect.signature(
+                fallback_method
+            ).parameters:
+                fallback_kwargs["emit_observability"] = False
+            plan = fallback_method(request, **fallback_kwargs)
             used_hard_constraint_fallback = True
         self.last_run_status = {
             "AttractionSearchAgent": _mode(attractions.used_fallback),
@@ -205,6 +217,17 @@ class MultiAgentOrchestrator:
                 (perf_counter() - workflow_started_at) * 1000,
                 self.last_run_status,
             )
+        if plan.observability_trace is None:
+            plan.observability_trace = build_planning_trace(
+                request,
+                plan,
+                candidates=attractions.attractions,
+                eligible_candidates=attractions.attractions,
+                run_id=run_id,
+                run_type="legacy",
+            )
+        refresh_planning_trace(plan, run_id=run_id, run_type="legacy")
+        emit_planning_trace(plan.observability_trace)
         return plan
 
     def replan(self, request: ReplanRequest) -> TripPlan:

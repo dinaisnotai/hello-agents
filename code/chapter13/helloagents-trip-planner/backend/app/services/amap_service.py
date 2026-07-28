@@ -193,7 +193,15 @@ class AmapService:
         route_type: str = "walking",
     ) -> RouteInfo:
         distance = self._haversine_meters(origin.latitude, origin.longitude, destination.latitude, destination.longitude)
-        speed_mps = 1.15 if route_type == "walking" else 6.0 if route_type == "driving" else 4.0
+        speed_mps = (
+            1.15
+            if route_type == "walking"
+            else 6.0
+            if route_type == "driving"
+            else 13.33
+            if distance > 30_000
+            else 4.0
+        )
         duration = int(distance / speed_mps)
         return RouteInfo(
             distance=round(distance, 1),
@@ -330,6 +338,12 @@ class AmapService:
                     tel=tel,
                     rating=self._safe_float(item.get("rating") or biz_ext.get("rating")),
                     ticket_price=self._estimate_ticket_price(str(item.get("type") or keywords)),
+                    area=str(
+                        item.get("adname")
+                        or item.get("district")
+                        or item.get("area")
+                        or ""
+                    ),
                     **hours,
                 )
             )
@@ -552,6 +566,14 @@ class AmapService:
                 ("国家博物馆", "博物馆"),
                 ("什刹海", "湖泊;历史街区"),
                 ("南锣鼓巷", "历史街区;商业街"),
+                ("八达岭长城", "风景名胜;长城;文物古迹"),
+                ("景山公园", "公园;文物古迹"),
+                ("王府井", "商业街;城市观光"),
+                ("圆明园", "公园;遗址"),
+                ("北京大学", "科教文化服务;学校"),
+                ("798艺术区", "文化艺术;城市观光"),
+                ("中国电影博物馆", "博物馆;专业展馆"),
+                ("中国海关博物馆", "博物馆;专业展馆"),
             ],
             "上海": [
                 ("外滩", "历史建筑"),
@@ -588,6 +610,14 @@ class AmapService:
             ),
         )
         pois = []
+        known_coordinates = {
+            "八达岭长城": Location(longitude=116.0168, latitude=40.3563),
+            "颐和园": Location(longitude=116.2732, latitude=39.9999),
+            "圆明园": Location(longitude=116.3036, latitude=40.0081),
+            "北京大学": Location(longitude=116.3109, latitude=39.9929),
+            "798艺术区": Location(longitude=116.4956, latitude=39.9841),
+            "中国电影博物馆": Location(longitude=116.5456, latitude=40.0066),
+        }
         for original_index, (name, category) in ranked_entries:
             pois.append(
                 POIInfo(
@@ -595,7 +625,9 @@ class AmapService:
                     name=name,
                     type=category,
                     address=f"{city}市中心区域",
-                    location=self._fallback_location(city, original_index),
+                    location=known_coordinates.get(
+                        name, self._fallback_location(city, original_index)
+                    ),
                     rating=4.5 - (original_index % 3) * 0.1,
                     ticket_price=self._estimate_ticket_price(category),
                 )
