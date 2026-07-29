@@ -359,7 +359,23 @@ class POICollector:
 
     def collect_hotel(self, request: TripRequest) -> Hotel:
         keyword = f"{request.hotel_area or request.city} {request.accommodation} 酒店"
-        nightly_cost = 350 if "经济" in request.accommodation else 650 if "舒适" in request.accommodation else 1000
+        accommodation = request.accommodation.lower()
+        if "经济" in accommodation or any(
+            term in accommodation for term in ("budget", "economy", "hostel")
+        ):
+            nightly_cost = 350
+        elif "舒适" in accommodation or any(
+            term in accommodation for term in ("comfortable", "comfort")
+        ):
+            nightly_cost = 650
+        else:
+            nightly_cost = 1000
+        if request.budget_limit is not None:
+            daily_budget = request.budget_limit / max(1, request.travel_days)
+            nightly_cost = min(
+                nightly_cost,
+                max(150, int(daily_budget * 0.5)),
+            )
         pois = self._safe_search(keyword, request.city)
         if not pois:
             return Hotel(

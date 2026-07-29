@@ -1,0 +1,347 @@
+{
+  "schema_version": "1.0",
+  "created_at": "2026-07-28T16:15:35.841469Z",
+  "total_cases": 7,
+  "passed_cases": 7,
+  "pass_rate": 1.0,
+  "results": [
+    {
+      "case_name": "no_preference_beijing_trip",
+      "passed": true,
+      "constraint_passed": true,
+      "quality_passed": true,
+      "planner_constraint_passed": true,
+      "criteria": [
+        {
+          "name": "low_transport_time",
+          "passed": true,
+          "actual": 90.7,
+          "expected": 120,
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "category_diversity",
+          "passed": true,
+          "actual": [
+            "campus",
+            "historic",
+            "museum",
+            "park"
+          ],
+          "expected": 3,
+          "detail": "",
+          "severity": "quality"
+        }
+      ],
+      "metrics": {
+        "selected_pois": 6,
+        "categories": 4,
+        "total_travel_minutes": 272,
+        "max_daily_walking_km": 0.0,
+        "planner_constraint_score": 1.0
+      },
+      "latency_seconds": 0.0211
+    },
+    {
+      "case_name": "elderly_beijing_trip",
+      "passed": true,
+      "constraint_passed": true,
+      "quality_passed": true,
+      "planner_constraint_passed": true,
+      "criteria": [
+        {
+          "name": "walking_limit",
+          "passed": true,
+          "actual": 0.0,
+          "expected": 5.0,
+          "detail": "",
+          "severity": "constraint"
+        },
+        {
+          "name": "avoid_hiking",
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "detail": "",
+          "severity": "constraint"
+        },
+        {
+          "name": "daily_end_time",
+          "passed": true,
+          "actual": [],
+          "expected": "18:00",
+          "detail": "",
+          "severity": "constraint"
+        },
+        {
+          "name": "low_transport_time",
+          "passed": true,
+          "actual": 87.0,
+          "expected": 120,
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "relaxed_pace",
+          "passed": true,
+          "actual": {
+            "pace": "relaxed",
+            "max_pois_per_day": 2,
+            "max_utilization": 92.0
+          },
+          "expected": {
+            "pace": "relaxed",
+            "max_pois_per_day": 3,
+            "max_utilization": 100
+          },
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "category_diversity",
+          "passed": true,
+          "actual": [
+            "historic",
+            "museum",
+            "park",
+            "shopping"
+          ],
+          "expected": 3,
+          "detail": "",
+          "severity": "quality"
+        }
+      ],
+      "metrics": {
+        "selected_pois": 6,
+        "categories": 4,
+        "total_travel_minutes": 348,
+        "max_daily_walking_km": 0.0,
+        "planner_constraint_score": 0.857
+      },
+      "latency_seconds": 0.0123
+    },
+    {
+      "case_name": "museum_lover_beijing_trip",
+      "passed": true,
+      "constraint_passed": true,
+      "quality_passed": true,
+      "planner_constraint_passed": true,
+      "criteria": [
+        {
+          "name": "must_visit:国家博物馆",
+          "passed": true,
+          "actual": true,
+          "expected": "国家博物馆",
+          "detail": "",
+          "severity": "constraint"
+        },
+        {
+          "name": "preference_alignment",
+          "passed": true,
+          "actual": [
+            "国家博物馆"
+          ],
+          "expected": [
+            "museum",
+            "history"
+          ],
+          "detail": "",
+          "severity": "quality"
+        }
+      ],
+      "metrics": {
+        "selected_pois": 6,
+        "categories": 4,
+        "total_travel_minutes": 296,
+        "max_daily_walking_km": 0.0,
+        "planner_constraint_score": 1.0
+      },
+      "latency_seconds": 0.0329
+    },
+    {
+      "case_name": "food_lover_shanghai_trip",
+      "passed": true,
+      "constraint_passed": true,
+      "quality_passed": true,
+      "planner_constraint_passed": true,
+      "criteria": [
+        {
+          "name": "low_transport_time",
+          "passed": true,
+          "actual": 80.7,
+          "expected": 120,
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "preference_alignment",
+          "passed": true,
+          "actual": [
+            "武康路"
+          ],
+          "expected": [
+            "food",
+            "market",
+            "shopping"
+          ],
+          "detail": "",
+          "severity": "quality"
+        }
+      ],
+      "metrics": {
+        "selected_pois": 6,
+        "categories": 6,
+        "total_travel_minutes": 242,
+        "max_daily_walking_km": 0.0,
+        "planner_constraint_score": 1.0
+      },
+      "latency_seconds": 0.0054
+    },
+    {
+      "case_name": "family_with_children_beijing_trip",
+      "passed": true,
+      "constraint_passed": true,
+      "quality_passed": true,
+      "planner_constraint_passed": true,
+      "criteria": [
+        {
+          "name": "relaxed_pace",
+          "passed": true,
+          "actual": {
+            "pace": "relaxed",
+            "max_pois_per_day": 1,
+            "max_utilization": 91.9
+          },
+          "expected": {
+            "pace": "relaxed",
+            "max_pois_per_day": 3,
+            "max_utilization": 100
+          },
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "category_diversity",
+          "passed": true,
+          "actual": [
+            "campus",
+            "historic",
+            "park"
+          ],
+          "expected": 3,
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "family_friendly",
+          "passed": true,
+          "actual": [
+            "颐和园"
+          ],
+          "expected": "at least one low/medium intensity family POI",
+          "detail": "",
+          "severity": "quality"
+        }
+      ],
+      "metrics": {
+        "selected_pois": 3,
+        "categories": 3,
+        "total_travel_minutes": 216,
+        "max_daily_walking_km": 0.0,
+        "planner_constraint_score": 0.72
+      },
+      "latency_seconds": 0.0274
+    },
+    {
+      "case_name": "tight_budget_beijing_trip",
+      "passed": true,
+      "constraint_passed": true,
+      "quality_passed": true,
+      "planner_constraint_passed": true,
+      "criteria": [
+        {
+          "name": "budget_limit",
+          "passed": true,
+          "actual": 1147,
+          "expected": 1200,
+          "detail": "",
+          "severity": "constraint"
+        },
+        {
+          "name": "within_budget",
+          "passed": true,
+          "actual": 1147,
+          "expected": 1200,
+          "detail": "",
+          "severity": "quality"
+        }
+      ],
+      "metrics": {
+        "selected_pois": 4,
+        "categories": 3,
+        "total_travel_minutes": 176,
+        "max_daily_walking_km": 0.0,
+        "planner_constraint_score": 1.0
+      },
+      "latency_seconds": 0.0078
+    },
+    {
+      "case_name": "relaxed_pace_hangzhou_trip",
+      "passed": true,
+      "constraint_passed": true,
+      "quality_passed": true,
+      "planner_constraint_passed": true,
+      "criteria": [
+        {
+          "name": "daily_end_time",
+          "passed": true,
+          "actual": [],
+          "expected": "19:00",
+          "detail": "",
+          "severity": "constraint"
+        },
+        {
+          "name": "must_visit:西湖",
+          "passed": true,
+          "actual": true,
+          "expected": "西湖",
+          "detail": "",
+          "severity": "constraint"
+        },
+        {
+          "name": "low_transport_time",
+          "passed": true,
+          "actual": 89.7,
+          "expected": 120,
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "relaxed_pace",
+          "passed": true,
+          "actual": {
+            "pace": "relaxed",
+            "max_pois_per_day": 2,
+            "max_utilization": 86.5
+          },
+          "expected": {
+            "pace": "relaxed",
+            "max_pois_per_day": 3,
+            "max_utilization": 100
+          },
+          "detail": "",
+          "severity": "quality"
+        }
+      ],
+      "metrics": {
+        "selected_pois": 6,
+        "categories": 4,
+        "total_travel_minutes": 269,
+        "max_daily_walking_km": 0.0,
+        "planner_constraint_score": 1.0
+      },
+      "latency_seconds": 0.005
+    }
+  ]
+}

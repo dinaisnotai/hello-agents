@@ -489,15 +489,26 @@ class SpatialItineraryPlanner:
             splittable = [area for area in area_order if buckets[area]]
             if not splittable:
                 break
-            area = min(
-                splittable,
+            seeded_categories = {
+                self._diversity_bucket(item)
+                for group in groups
+                for item in group
+            }
+            area, seed = min(
+                (
+                    (area, attraction)
+                    for area in splittable
+                    for attraction in buckets[area]
+                ),
                 key=lambda item: (
-                    self._priority_key(buckets[item][0], must_visit),
-                    -len(buckets[item]),
-                    item,
+                    self._diversity_bucket(item[1]) in seeded_categories,
+                    self._priority_key(item[1], must_visit),
+                    -len(buckets[item[0]]),
+                    item[0],
                 ),
             )
-            groups[day_index].append(buckets[area].pop(0))
+            groups[day_index].append(seed)
+            buckets[area].remove(seed)
             group_areas[day_index].add(area)
 
         remaining = sorted(
