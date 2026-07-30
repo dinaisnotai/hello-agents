@@ -34,6 +34,8 @@ class EvaluationDatasetTest(unittest.TestCase):
                 "family_with_children_beijing_trip",
                 "tight_budget_beijing_trip",
                 "relaxed_pace_hangzhou_trip",
+                "palace_parent_child_dedup",
+                "multi_day_palace_no_repeat",
             }.issubset(names)
         )
 

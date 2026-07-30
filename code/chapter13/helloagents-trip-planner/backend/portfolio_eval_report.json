@@ -1,0 +1,206 @@
+{
+  "schema_version": "1.0",
+  "created_at": "2026-07-29T15:06:08.885214Z",
+  "total_cases": 1,
+  "passed_cases": 0,
+  "pass_rate": 0.0,
+  "results": [
+    {
+      "case_name": "portfolio_explicit_deep_history_beijing",
+      "passed": false,
+      "constraint_passed": true,
+      "quality_passed": false,
+      "planner_constraint_passed": true,
+      "criteria": [
+        {
+          "name": "preference_alignment",
+          "passed": true,
+          "actual": [
+            "故宫博物院",
+            "南锣鼓巷",
+            "北京湖广会馆",
+            "什刹海",
+            "景山公园"
+          ],
+          "expected": [
+            "historic"
+          ],
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "min_niche_ratio",
+          "passed": false,
+          "actual": 0.167,
+          "expected": 0.2,
+          "detail": "",
+          "severity": "quality"
+        },
+        {
+          "name": "portfolio_selection_explanations",
+          "passed": true,
+          "actual": [
+            {
+              "name": "故宫博物院",
+              "role": "core_landmark",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": null
+            },
+            {
+              "name": "天坛公园",
+              "role": "core_landmark",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "颐和园",
+              "role": "core_landmark",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "国家博物馆",
+              "role": "core_landmark",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "什刹海",
+              "role": "major_attraction",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": null
+            },
+            {
+              "name": "南锣鼓巷",
+              "role": "major_attraction",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": null
+            },
+            {
+              "name": "景山公园",
+              "role": "major_attraction",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": null
+            },
+            {
+              "name": "圆明园",
+              "role": "major_attraction",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "国子监",
+              "role": "major_attraction",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "正阳门箭楼",
+              "role": "major_attraction",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "首都博物馆",
+              "role": "major_attraction",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": "not_selected_by_route_planner"
+            },
+            {
+              "name": "八达岭长城",
+              "role": "core_landmark",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "北京湖广会馆",
+              "role": "niche_attraction",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": null
+            },
+            {
+              "name": "史家胡同博物馆",
+              "role": "niche_attraction",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": "not_selected_by_route_planner"
+            },
+            {
+              "name": "北京大学",
+              "role": "major_attraction",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": null
+            },
+            {
+              "name": "王府井",
+              "role": "major_attraction",
+              "reason": "preference_calibrated_portfolio_fill",
+              "rejected": "not_selected_by_route_planner"
+            },
+            {
+              "name": "798艺术区",
+              "role": "niche_attraction",
+              "reason": "not_selected_due_to_niche_quota_or_saturation",
+              "rejected": "not_selected_due_to_niche_quota_or_saturation"
+            },
+            {
+              "name": "北京动物园",
+              "role": "major_attraction",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "中国科学技术馆",
+              "role": "major_attraction",
+              "reason": "not_selected_after_feasibility_capacity_and_route_tradeoff",
+              "rejected": "not_selected_after_feasibility_capacity_and_route_tradeoff"
+            },
+            {
+              "name": "亮马河国际风情水岸公园",
+              "role": "niche_attraction",
+              "reason": "not_selected_due_to_niche_quota_or_saturation",
+              "rejected": "not_selected_due_to_niche_quota_or_saturation"
+            },
+            {
+              "name": "中国海关博物馆",
+              "role": "niche_attraction",
+              "reason": "not_selected_due_to_niche_quota_or_saturation",
+              "rejected": "not_selected_due_to_niche_quota_or_saturation"
+            },
+            {
+              "name": "中国电影博物馆",
+              "role": "niche_attraction",
+              "reason": "not_selected_due_to_niche_quota_or_saturation",
+              "rejected": "not_selected_due_to_niche_quota_or_saturation"
+            },
+            {
+              "name": "念坛公园",
+              "role": "niche_attraction",
+              "reason": "not_selected_due_to_niche_quota_or_saturation",
+              "rejected": "not_selected_due_to_niche_quota_or_saturation"
+            }
+          ],
+          "expected": "every candidate has a selection role and decision reason",
+          "detail": "",
+          "severity": "quality"
+        }
+      ],
+      "metrics": {
+        "selected_pois": 6,
+        "categories": 4,
+        "total_travel_minutes": 536,
+        "max_daily_walking_km": 0.0,
+        "planner_constraint_score": 1.0,
+        "core_landmark_count": 1,
+        "major_attraction_count": 4,
+        "complementary_attraction_count": 0,
+        "niche_attraction_count": 1,
+        "niche_ratio": 0.167,
+        "repeated_subcategory_ratio": 0.333,
+        "preference_coverage": 0.833,
+        "landmark_coverage": 0.2,
+        "portfolio_balance_score": 53.2
+      },
+      "latency_seconds": 0.0612
+    }
+  ]
+}

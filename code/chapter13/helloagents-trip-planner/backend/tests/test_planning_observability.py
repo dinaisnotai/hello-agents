@@ -117,6 +117,22 @@ class PlanningObservabilityTest(unittest.TestCase):
         self.assertEqual(payload["event"], "travel_planning_run")
         self.assertEqual(payload["run_id"], "json-test")
 
+    def test_final_trace_releases_stale_major_quota_and_uses_final_state(self):
+        major = _attraction("Major", "historic", 116.4, 80)
+        major.selection_role = "major_attraction"
+        major.selection_reason = "major_attraction_quota"
+        plan = TripPlan(
+            city="Beijing", start_date="2026-10-10", end_date="2026-10-10",
+            days=[], overall_suggestions="test",
+        )
+
+        trace = build_planning_trace(_request(), plan, candidates=[major])
+
+        self.assertEqual(trace.portfolio_metrics.major_attraction_count, 0)
+        candidate = trace.candidate_pois[0]
+        self.assertEqual(candidate.selection_reason, "rejected_final_route_or_repair")
+        self.assertFalse(candidate.final_selected)
+
 
 if __name__ == "__main__":
     unittest.main()

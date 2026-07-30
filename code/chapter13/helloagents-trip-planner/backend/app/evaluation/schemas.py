@@ -27,6 +27,20 @@ class QualityExpectations(BaseModel):
     within_budget: bool = False
     max_average_transport_minutes: int = Field(default=120, ge=0)
     min_categories: int = Field(default=3, ge=1)
+    no_duplicate_visits: bool = False
+    exclusive_poi_groups: list[list[str]] = Field(default_factory=list)
+    core_landmark_coverage: bool = False
+    min_core_landmarks: int = Field(default=1, ge=1)
+    min_major_attractions: int = Field(default=0, ge=0)
+    max_niche_ratio: float | None = Field(default=None, ge=0, le=1)
+    min_niche_ratio: float | None = Field(default=None, ge=0, le=1)
+    max_repeated_subcategory_ratio: float | None = Field(
+        default=None, ge=0, le=1
+    )
+    min_portfolio_balance_score: float | None = Field(
+        default=None, ge=0, le=100
+    )
+    require_selection_explanations: bool = False
 
 
 class EvaluationCase(BaseModel):

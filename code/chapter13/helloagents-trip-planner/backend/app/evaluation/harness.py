@@ -10,6 +10,8 @@ from typing import Callable, Iterable
 from ..models.schemas import Attraction, TripPlan
 from ..services.attraction_scorer import AttractionScorer
 from ..services.place_name_service import place_names_match
+from ..services.poi_identity_resolver import POIIdentityResolver
+from ..services.planning_observability import calculate_portfolio_metrics
 from .schemas import (
     CriterionResult,
     EvaluationCase,
@@ -248,15 +250,46 @@ def evaluate_plan(case: EvaluationCase, plan: TripPlan) -> EvaluationResult:
                 limit,
             )
         )
+    if quality.no_duplicate_visits:
+        resolver = POIIdentityResolver()
+        resolver.assign_visit_keys(attractions)
+        keys = [item.visit_key for item in attractions]
+        duplicates = sorted(
+            {key for key in keys if key and keys.count(key) > 1}
+        )
+        criteria.append(
+            _criterion(
+                "no_duplicate_visits",
+                not duplicates,
+                duplicates,
+                [],
+            )
+        )
+    for group in quality.exclusive_poi_groups:
+        matches = [
+            item.name
+            for item in attractions
+            if any(place_names_match(name, item.name) for name in group)
+        ]
+        criteria.append(
+            _criterion(
+                "exclusive_poi_group:" + "|".join(group),
+                len(matches) == 1,
+                matches,
+                "exactly one canonical visit",
+            )
+        )
+    if quality.core_landmark_coverage:
+        core = [item.name for item in attractions if item.is_core_landmark]
+        criteria.append(
+            _criterion(
+                "core_landmark_coverage",
+                len(core) >= quality.min_core_landmarks,
+                core,
+                quality.min_core_landmarks,
+            )
+        )
 
-    constraint_criteria = [
-        item for item in criteria if item.severity == "constraint"
-    ]
-    quality_criteria = [
-        item for item in criteria if item.severity == "quality"
-    ]
-    constraint_passed = all(item.passed for item in constraint_criteria)
-    quality_passed = all(item.passed for item in quality_criteria)
     metrics = {
         "selected_pois": len(attractions),
         "categories": len(categories),
@@ -272,6 +305,102 @@ def evaluate_plan(case: EvaluationCase, plan: TripPlan) -> EvaluationResult:
         ),
         "planner_constraint_score": plan.constraint_report.score,
     }
+    portfolio = (
+        plan.observability_trace.portfolio_metrics
+        if plan.observability_trace is not None
+        else calculate_portfolio_metrics(plan, attractions, request)
+    )
+    metrics.update(
+        portfolio.model_dump(mode="json", exclude={"displaced_core_major"})
+    )
+    if quality.min_major_attractions:
+        criteria.append(
+            _criterion(
+                "major_attraction_coverage",
+                portfolio.major_attraction_count
+                >= quality.min_major_attractions,
+                portfolio.major_attraction_count,
+                quality.min_major_attractions,
+            )
+        )
+    if quality.max_niche_ratio is not None:
+        criteria.append(
+            _criterion(
+                "max_niche_ratio",
+                portfolio.niche_ratio <= quality.max_niche_ratio,
+                portfolio.niche_ratio,
+                quality.max_niche_ratio,
+            )
+        )
+    if quality.min_niche_ratio is not None:
+        criteria.append(
+            _criterion(
+                "min_niche_ratio",
+                portfolio.niche_ratio >= quality.min_niche_ratio,
+                portfolio.niche_ratio,
+                quality.min_niche_ratio,
+            )
+        )
+    if quality.max_repeated_subcategory_ratio is not None:
+        criteria.append(
+            _criterion(
+                "subcategory_saturation",
+                portfolio.repeated_subcategory_ratio
+                <= quality.max_repeated_subcategory_ratio,
+                portfolio.repeated_subcategory_ratio,
+                quality.max_repeated_subcategory_ratio,
+            )
+        )
+    if quality.min_portfolio_balance_score is not None:
+        criteria.append(
+            _criterion(
+                "portfolio_balance",
+                portfolio.portfolio_balance_score
+                >= quality.min_portfolio_balance_score,
+                portfolio.portfolio_balance_score,
+                quality.min_portfolio_balance_score,
+            )
+        )
+    if quality.require_selection_explanations:
+        candidate_traces = (
+            plan.observability_trace.candidate_pois
+            if plan.observability_trace
+            else []
+        )
+        criteria.append(
+            _criterion(
+                "portfolio_selection_explanations",
+                bool(candidate_traces)
+                and all(
+                    item.selection_reason
+                    and (
+                        item.rejection_reason is not None
+                        or item.name in {
+                            attraction.name for attraction in attractions
+                        }
+                    )
+                    for item in candidate_traces
+                ),
+                [
+                    {
+                        "name": item.name,
+                        "role": item.selection_role,
+                        "reason": item.selection_reason,
+                        "rejected": item.rejection_reason,
+                    }
+                    for item in candidate_traces
+                ],
+                "every candidate has a selection role and decision reason",
+            )
+        )
+    constraint_criteria = [
+        item for item in criteria if item.severity == "constraint"
+    ]
+    quality_criteria = [
+        item for item in criteria if item.severity == "quality"
+    ]
+    constraint_passed = all(item.passed for item in constraint_criteria)
+    quality_passed = all(item.passed for item in quality_criteria)
     return EvaluationResult(
         case_name=case.name,
         passed=(

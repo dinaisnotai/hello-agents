@@ -25,6 +25,8 @@ class TravelIntent(BaseModel):
     energy_preference: Literal["low", "normal", "high"] | None = None
     daily_start_time: str = "09:00"
     daily_end_time: str = "20:00"
+    arrival_time: str | None = None
+    departure_time: str | None = None
     hard_constraints: list[str] = Field(default_factory=list)
     soft_preferences: list[str] = Field(default_factory=list)
     free_text: str = ""

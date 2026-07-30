@@ -70,14 +70,14 @@ class HotelAgent:
     def _fallback(self, request: TripRequest, warning: str) -> HotelSearchResult:
         from .trip_planner_agent import POICollector
 
-        hotel = POICollector(self.search_tool.amap_service).collect_hotel(request)
+        hotels = POICollector(self.search_tool.amap_service).collect_hotels(request)
         area = request.hotel_area or request.city
         keyword = f"{area} {request.accommodation} 酒店"
         return HotelSearchResult(
             search_keywords=[keyword],
-            candidates=[hotel],
-            recommended_hotel=hotel,
-            reason="根据住宿区域和住宿档次使用确定性规则推荐",
+            candidates=hotels,
+            recommended_hotel=hotels[0],
+            reason="保留住宿候选，交由行程可达性、交通与预算联合评分",
             warnings=[warning],
             used_fallback=True,
         )

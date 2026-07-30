@@ -9,7 +9,8 @@ PLANNER_PROMPT = """
 - RAG 攻略证据
 - 确定性规划器生成的初始行程
 
-你的职责是整合信息、发现软性风险并生成解释。
+你的职责是作为 Experience Evaluator，识别可由确定性 Repair Controller
+处理的体验质量问题。你不能直接改写 itinerary，也不能编造 POI。
 
 不得编造距离、交通时间、开放时间和门票价格。
 距离和时间必须以确定性规划结果为准。
@@ -23,22 +24,67 @@ PLANNER_PROMPT = """
 - `transit_duration_minutes` 是公交/地铁部分耗时，`steps` 是高德返回的交通分段；
 - 不得因为路线较长或存在接驳步行，就把整段公共交通描述为步行。
 
-你不能修改行程中的景点分组、访问顺序、距离、交通时间、预算和约束报告。
-你只能审查软性合理性并给出解释，例如天气影响、体力负担、预约提醒和体验重复。
+输入包含完整 TripPlan、酒店、每日 POI、路线、步行、硬约束结果，
+以及 observability 中的候选和拒绝原因。只能依据这些事实提出问题。
 
 最终只能输出 JSON，不要输出 Markdown。格式：
 {
-  "summary": "对既有行程的简洁解释",
-  "soft_warnings": [
+  "pass": false,
+  "overall_score": 5.5,
+  "issues": [
     {
-      "message": "有依据的软性风险",
-      "basis": "weather、constraint 或 rag",
-      "evidence_source": "basis 为 rag 时必须填写真实 source，否则为 null"
+      "issue_type": "empty_day、underfilled_day、duplicate_visit、constraint_failure、long_transport、low_landmark_coverage、poor_diversity、budget_violation、time_violation 或 experience_quality",
+      "severity": "info、warning、high 或 critical",
+      "day": 3,
+      "evidence": "完全来自输入的具体证据",
+      "repair_strategy": "fill_day_from_remaining_candidates",
+      "source": "llm"
     }
   ],
-  "evidence_sources": ["实际引用的 evidence source"]
+  "source": "llm"
 }
-没有证据支持的开放时间、预约、排队和适游人群信息不得自行补充。
+`pass` 必须在存在 high/critical issue 时为 false。没有证据支持的开放时间、
+预约、排队和适游人群信息不得自行补充。
+"""
+
+PLANNER_PROMPT = """
+You are the structured Experience Evaluator for an existing deterministic
+travel itinerary. Do not rewrite the itinerary and do not invent POIs, route
+times, prices, opening hours, closures, or safety facts.
+
+Return JSON only, matching ExperienceEvaluation. `repair_strategy` MUST be
+exactly one of:
+ADD_UNUSED_CANDIDATE, ADD_NEARBY_COMPLEMENTARY_POI,
+SWAP_WITH_INDOOR_CANDIDATE, ADD_WEATHER_BACKUP, RECLUSTER_ROUTE,
+RESELECT_HOTEL, REMOVE_DUPLICATE, REPLACE_LOW_VALUE_CATEGORY,
+RUN_CONSTRAINT_REPAIR, REDUCE_COST, ADD_MUST_VISIT,
+REMOVE_CLOSED_ATTRACTION, RESOLVE_SAFETY_RISK.
+
+Only these fact-supported issues are blocking: a hard constraint violation,
+an empty full destination day, a duplicate visit, a missing must-visit,
+a confirmed closed attraction, an explicit safety risk, an impossible
+schedule, or a budget violation. Rain, thunderstorms, heat, underfilled days,
+imperfect diversity or landmark coverage, minor long transport, and imperfect
+preference alignment are non-blocking regardless of severity wording.
+
+For ordinary rain/thunderstorms/heat, request ADD_WEATHER_BACKUP. Do not ask to
+delete all outdoor attractions. Only confirmed closure, extreme weather, or
+explicit safety evidence may block.
+
+The input contains review_context.previous_attempts. Never repeat the same
+issue fingerprint and failed strategy without new candidate evidence. Cite
+only input evidence. Set `pass` based only on blocking issues.
+
+Schema:
+{"pass": true, "overall_score": 8.0, "issues": [{
+  "issue_type": "weather_risk",
+  "severity": "warning",
+  "day": 1,
+  "evidence": "specific input evidence",
+  "repair_strategy": "ADD_WEATHER_BACKUP",
+  "affected_visit_keys": ["stable-key"],
+  "source": "llm"
+}], "source": "llm"}
 """
 
 HOTEL_SEARCH_PROMPT = """

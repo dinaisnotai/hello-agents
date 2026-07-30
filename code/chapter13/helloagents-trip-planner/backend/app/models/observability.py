@@ -7,6 +7,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+from .quality import QualityGateTrace
 
 
 class UserRequirementTrace(BaseModel):
@@ -21,12 +22,32 @@ class UserRequirementTrace(BaseModel):
 
 class CandidatePOITrace(BaseModel):
     name: str
+    visit_key: str = ""
+    landmark_tier: str = "complementary_attraction"
+    final_selected: bool = False
     category: str = "general"
     location: dict[str, float] = Field(default_factory=dict)
     base_score: float = 0
     preference_score: float = 0
     final_score: float = 0
     rejection_reason: str | None = None
+    selection_role: str = "complementary_attraction"
+    selection_reason: str = ""
+    selection_trace: list[dict[str, Any]] = Field(default_factory=list)
+    score_breakdown: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortfolioMetricsTrace(BaseModel):
+    core_landmark_count: int = 0
+    major_attraction_count: int = 0
+    complementary_attraction_count: int = 0
+    niche_attraction_count: int = 0
+    niche_ratio: float = 0
+    repeated_subcategory_ratio: float = 0
+    preference_coverage: float = 0
+    landmark_coverage: float = 0
+    portfolio_balance_score: float = 0
+    displaced_core_major: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DailyScheduleTrace(BaseModel):
@@ -65,3 +86,7 @@ class PlanningRunTrace(BaseModel):
     candidate_pois: list[CandidatePOITrace] = Field(default_factory=list)
     route_planning: RoutePlanningTrace
     validation_result: ValidationTrace
+    quality_gate: QualityGateTrace = Field(default_factory=QualityGateTrace)
+    portfolio_metrics: PortfolioMetricsTrace = Field(
+        default_factory=PortfolioMetricsTrace
+    )

@@ -25,7 +25,10 @@ class CoverageValidator(ConstraintValidator):
                 len(plan.days) == expected
                 and (
                     expected == 1
-                    or all(day.attractions for day in plan.days)
+                    or all(
+                        day.attractions or self._is_short_partial_day(day)
+                        for day in plan.days
+                    )
                 )
             )
             if has_required_coverage:
@@ -41,6 +44,7 @@ class CoverageValidator(ConstraintValidator):
                             day.day_index + 1
                             for day in plan.days
                             if not day.attractions
+                            and not self._is_short_partial_day(day)
                         ],
                     },
                     expected=expected,
@@ -69,6 +73,8 @@ class CoverageValidator(ConstraintValidator):
         violations = []
         for day in plan.days:
             if constraint.type == ConstraintType.ATTRACTION_COUNT:
+                if self._is_short_partial_day(day):
+                    continue
                 low, high = constraint.value
                 count = len(day.attractions)
                 remote_solo = (
@@ -101,3 +107,11 @@ class CoverageValidator(ConstraintValidator):
                         )
                     )
         return violations
+
+    @staticmethod
+    def _is_short_partial_day(day) -> bool:
+        return (
+            day.partial_day_reason in {"arrival", "departure"}
+            and day.available_minutes is not None
+            and day.available_minutes < 180
+        )

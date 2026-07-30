@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
 from ..constraints.schema import Constraint, ValidationResult
 from ..services.city_name_service import normalize_city_name
 from .observability import PlanningRunTrace
+from .quality import ExperienceEvaluation, ExperienceIssue, RepairIteration
 
 
 AvoidCategory = Literal[
@@ -53,6 +54,14 @@ class TripRequest(BaseModel):
     )
     daily_start_time: Optional[str] = Field(default=None, description="Daily start time, HH:MM")
     daily_end_time: Optional[str] = Field(default=None, description="Daily end time, HH:MM")
+    arrival_time: Optional[str] = Field(
+        default=None,
+        description="Actual destination arrival time on the first day, HH:MM",
+    )
+    departure_time: Optional[str] = Field(
+        default=None,
+        description="Actual destination departure time on the last day, HH:MM",
+    )
     hard_constraints: List[str] = Field(default_factory=list, description="Explicit hard constraints")
     soft_preferences: List[str] = Field(default_factory=list, description="Explicit soft preferences")
     first_visit: Optional[bool] = Field(
@@ -69,7 +78,12 @@ class TripRequest(BaseModel):
     def normalize_city(cls, value: object) -> str:
         return normalize_city_name(str(value or ""))
 
-    @field_validator("daily_start_time", "daily_end_time")
+    @field_validator(
+        "daily_start_time",
+        "daily_end_time",
+        "arrival_time",
+        "departure_time",
+    )
     @classmethod
     def validate_daily_time(cls, value: Optional[str]) -> Optional[str]:
         if value in (None, ""):
@@ -145,6 +159,10 @@ class Attraction(BaseModel):
     area: str = Field(default="", description="Administrative or planning area")
     popularity: int = Field(default=5, ge=0, le=10)
     first_visit_priority: int = Field(default=5, ge=0, le=10)
+    is_core_landmark: bool = Field(
+        default=False,
+        description="Protected city landmark for first-visit portfolio coverage",
+    )
     crowd_level: int = Field(default=5, ge=0, le=10)
     intensity_level: Literal["low", "medium", "high"] = "medium"
     estimated_internal_walking_km: float = Field(default=0.5, ge=0)
@@ -152,6 +170,14 @@ class Attraction(BaseModel):
     rating: Optional[float] = None
     photos: Optional[List[str]] = Field(default_factory=list)
     poi_id: Optional[str] = ""
+    parent_poi_id: str = Field(
+        default="",
+        description="Provider POI id of the containing attraction or venue",
+    )
+    visit_key: str = Field(
+        default="",
+        description="Canonical identity used to prevent duplicate visits",
+    )
     image_url: Optional[str] = None
     ticket_price: int = Field(default=0, ge=0)
     score: float = Field(default=0, description="Internal planning score")
@@ -171,6 +197,17 @@ class Attraction(BaseModel):
     planned_arrival_time: Optional[str] = None
     planned_departure_time: Optional[str] = None
     opening_hours_status: Literal["open", "closed", "unknown"] = "unknown"
+    selection_role: Literal[
+        "core_landmark",
+        "major_attraction",
+        "complementary_attraction",
+        "niche_attraction",
+    ] = "complementary_attraction"
+    selection_reason: str = ""
+    selection_trace: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Auditable candidate acceptance and rejection decisions",
+    )
 
 
 class Meal(BaseModel):
@@ -191,6 +228,11 @@ class Hotel(BaseModel):
     distance: str = ""
     type: str = ""
     estimated_cost: int = Field(default=0, ge=0)
+    selection_score: float = Field(
+        default=0,
+        description="Deterministic accommodation-selection score",
+    )
+    score_breakdown: Dict[str, float] = Field(default_factory=dict)
 
 
 class RouteStep(BaseModel):
@@ -260,6 +302,21 @@ class DayPlan(BaseModel):
     daily_cost: int = 0
     planned_start_time: Optional[str] = None
     planned_end_time: Optional[str] = None
+    available_minutes: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Actual destination time available on this calendar day",
+    )
+    partial_day_reason: Optional[Literal["arrival", "departure"]] = None
+    primary_plan: List[Attraction] = Field(
+        default_factory=list,
+        description="Primary attractions for the day; mirrors attractions in API output",
+    )
+    weather_backup: List[Attraction] = Field(
+        default_factory=list,
+        description="Indoor alternatives selected only from known candidates",
+    )
+    weather_warning: str = ""
 
 
 class WeatherInfo(BaseModel):
@@ -370,6 +427,17 @@ class TripPlan(BaseModel):
     normalized_constraints: List[Constraint] = Field(default_factory=list)
     validation_result: ValidationResult = Field(default_factory=ValidationResult)
     failure_reason: Optional[str] = None
+    quality_gate_passed: bool = True
+    quality_evaluation: Optional[ExperienceEvaluation] = None
+    unresolved_quality_issues: List[ExperienceIssue] = Field(
+        default_factory=list
+    )
+    unresolved_blocking_issues: List[ExperienceIssue] = Field(default_factory=list)
+    unresolved_non_blocking_issues: List[ExperienceIssue] = Field(default_factory=list)
+    degraded_reason: Optional[str] = None
+    suggested_alternatives: List[str] = Field(default_factory=list)
+    best_effort: bool = False
+    repair_history: List[RepairIteration] = Field(default_factory=list)
     observability_trace: Optional[PlanningRunTrace] = None
 
 
@@ -400,6 +468,8 @@ class ReplanRequest(BaseModel):
 
 class POIInfo(BaseModel):
     id: str = ""
+    parent_poi_id: str = ""
+    visit_key: str = ""
     name: str
     type: str = "景点"
     address: str = ""

@@ -1,0 +1,2567 @@
+[
+  {
+    "name": "beijing_thunderstorm_with_indoor_backup",
+    "request": {
+      "city": "北京",
+      "start_date": "2026-08-08",
+      "end_date": "2026-08-08",
+      "travel_days": 1,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": [
+        "历史文化",
+        "城市公园"
+      ],
+      "free_text_input": "",
+      "budget_limit": null,
+      "pace": "balanced",
+      "must_visit": [],
+      "avoid_categories": [],
+      "dietary_restrictions": [],
+      "max_daily_walk_km": null,
+      "hotel_area": "",
+      "travelers": [],
+      "energy_preference": null,
+      "daily_start_time": null,
+      "daily_end_time": null,
+      "arrival_time": null,
+      "departure_time": null,
+      "hard_constraints": [],
+      "soft_preferences": [],
+      "first_visit": null,
+      "prefer_classic": null
+    },
+    "issues_before": {
+      "pass": true,
+      "overall_score": 9.5,
+      "issues": [
+        {
+          "issue_type": "weather_risk",
+          "severity": "warning",
+          "day": 1,
+          "evidence": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+          "repair_strategy": "ADD_WEATHER_BACKUP",
+          "affected_visit_keys": [
+            "provider:request-demo-1",
+            "provider:request-demo-2"
+          ],
+          "source": "deterministic",
+          "resolution_status": "open",
+          "fingerprint": "6d0db926232cab10fd4c"
+        }
+      ],
+      "source": "deterministic",
+      "contract_errors": []
+    },
+    "repair_trace": [
+      {
+        "repair_action": "ADD_WEATHER_BACKUP:中国国家博物馆",
+        "action_result": "accepted; plan revalidated",
+        "accepted": true,
+        "rejected_reason": "",
+        "issues_before": [
+          {
+            "issue_type": "weather_risk",
+            "severity": "warning",
+            "day": 1,
+            "evidence": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+            "repair_strategy": "ADD_WEATHER_BACKUP",
+            "affected_visit_keys": [
+              "provider:request-demo-1",
+              "provider:request-demo-2"
+            ],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "6d0db926232cab10fd4c"
+          }
+        ],
+        "issues_after": [
+          {
+            "issue_type": "weather_risk",
+            "severity": "info",
+            "day": 1,
+            "evidence": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+            "repair_strategy": "ADD_WEATHER_BACKUP",
+            "affected_visit_keys": [
+              "provider:request-demo-1",
+              "provider:request-demo-2"
+            ],
+            "source": "deterministic",
+            "resolution_status": "mitigated",
+            "fingerprint": "6d0db926232cab10fd4c"
+          }
+        ]
+      }
+    ],
+    "issues_after": {
+      "pass": true,
+      "overall_score": 10.0,
+      "issues": [
+        {
+          "issue_type": "weather_risk",
+          "severity": "info",
+          "day": 1,
+          "evidence": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+          "repair_strategy": "ADD_WEATHER_BACKUP",
+          "affected_visit_keys": [
+            "provider:request-demo-1",
+            "provider:request-demo-2"
+          ],
+          "source": "deterministic",
+          "resolution_status": "mitigated",
+          "fingerprint": "6d0db926232cab10fd4c"
+        }
+      ],
+      "source": "deterministic",
+      "contract_errors": []
+    },
+    "final_gate_decision": {
+      "pass": true,
+      "blocking_count": 0,
+      "warning_count": 0,
+      "degraded_reason": null,
+      "best_effort": false
+    },
+    "complete_user_response": {
+      "success": true,
+      "message": "旅行计划生成成功",
+      "data": {
+        "city": "北京",
+        "start_date": "2026-08-08",
+        "end_date": "2026-08-08",
+        "days": [
+          {
+            "date": "2026-08-08",
+            "day_index": 0,
+            "description": "根据用户请求生成的首选行程",
+            "transportation": "public transit",
+            "accommodation": "comfortable hotel",
+            "hotel": {
+              "name": "北京中心酒店",
+              "address": "",
+              "location": {
+                "longitude": 116.397,
+                "latitude": 39.916
+              },
+              "price_range": "",
+              "rating": "",
+              "distance": "",
+              "type": "comfortable hotel",
+              "estimated_cost": 360,
+              "selection_score": 0.0,
+              "score_breakdown": {}
+            },
+            "attractions": [
+              {
+                "name": "故宫博物院",
+                "address": "",
+                "location": {
+                  "longitude": 116.397,
+                  "latitude": 39.916
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "historic",
+                "categories": [
+                  "historic"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-1",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-1",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 89.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": "09:00",
+                "planned_departure_time": "11:30",
+                "opening_hours_status": "unknown"
+              },
+              {
+                "name": "景山公园",
+                "address": "",
+                "location": {
+                  "longitude": 116.396,
+                  "latitude": 39.925
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "park",
+                "categories": [
+                  "park"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-2",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-2",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 88.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": "11:45",
+                "planned_departure_time": "14:15",
+                "opening_hours_status": "unknown"
+              }
+            ],
+            "meals": [],
+            "route_segments": [
+              {
+                "day_index": 0,
+                "origin": "北京中心酒店",
+                "destination": "故宫博物院",
+                "route_type": "walking",
+                "distance_meters": 0.0,
+                "duration_minutes": 0,
+                "walking_distance_meters": 0.0,
+                "walking_duration_minutes": 0,
+                "transit_duration_minutes": 0,
+                "steps": [],
+                "description": "",
+                "planned_departure_time": "09:00",
+                "planned_arrival_time": "09:00"
+              },
+              {
+                "day_index": 0,
+                "origin": "故宫博物院",
+                "destination": "景山公园",
+                "route_type": "walking",
+                "distance_meters": 1004.3813099032063,
+                "duration_minutes": 15,
+                "walking_distance_meters": 1004.3813099032063,
+                "walking_duration_minutes": 0,
+                "transit_duration_minutes": 0,
+                "steps": [],
+                "description": "",
+                "planned_departure_time": "11:30",
+                "planned_arrival_time": "11:45"
+              },
+              {
+                "day_index": 0,
+                "origin": "景山公园",
+                "destination": "北京中心酒店",
+                "route_type": "walking",
+                "distance_meters": 1004.3813099032063,
+                "duration_minutes": 15,
+                "walking_distance_meters": 1004.3813099032063,
+                "walking_duration_minutes": 0,
+                "transit_duration_minutes": 0,
+                "steps": [],
+                "description": "",
+                "planned_departure_time": "14:15",
+                "planned_arrival_time": "14:30"
+              }
+            ],
+            "schedule_blocks": [],
+            "max_walking_leg_minutes": null,
+            "daily_distance_km": 2.01,
+            "daily_walking_distance_km": 2.01,
+            "daily_visit_minutes": 300,
+            "daily_travel_minutes": 30,
+            "daily_buffer_minutes": 60,
+            "daily_meal_minutes": 0,
+            "daily_duration_minutes": 390,
+            "daily_elapsed_minutes": 330,
+            "day_utilization_score": 61.1,
+            "daily_cost": 396,
+            "planned_start_time": "09:00",
+            "planned_end_time": "14:30",
+            "available_minutes": 660,
+            "partial_day_reason": null,
+            "primary_plan": [
+              {
+                "name": "故宫博物院",
+                "address": "",
+                "location": {
+                  "longitude": 116.397,
+                  "latitude": 39.916
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "historic",
+                "categories": [
+                  "historic"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-1",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-1",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 89.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": "09:00",
+                "planned_departure_time": "11:30",
+                "opening_hours_status": "unknown"
+              },
+              {
+                "name": "景山公园",
+                "address": "",
+                "location": {
+                  "longitude": 116.396,
+                  "latitude": 39.925
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "park",
+                "categories": [
+                  "park"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-2",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-2",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 88.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": "11:45",
+                "planned_departure_time": "14:15",
+                "opening_hours_status": "unknown"
+              }
+            ],
+            "weather_backup": [
+              {
+                "name": "中国国家博物馆",
+                "address": "",
+                "location": {
+                  "longitude": 116.407,
+                  "latitude": 39.904
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "museum",
+                "categories": [
+                  "museum"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-3",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-3",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 87.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": null,
+                "planned_departure_time": null,
+                "opening_hours_status": "unknown"
+              }
+            ],
+            "weather_warning": "雷阵雨：保留主计划，并在临近出发时按实时天气切换至室内备选（中国国家博物馆）。"
+          }
+        ],
+        "weather_info": [
+          {
+            "date": "2026-08-08",
+            "day_weather": "雷阵雨",
+            "night_weather": "",
+            "day_temp": 0,
+            "night_temp": 0,
+            "wind_direction": "",
+            "wind_power": ""
+          }
+        ],
+        "overall_suggestions": "按实时开放信息和天气执行。",
+        "budget": {
+          "total_attractions": 0,
+          "total_hotels": 360,
+          "total_meals": 0,
+          "total_transportation": 36,
+          "total": 396,
+          "budget_limit": null,
+          "remaining": null
+        },
+        "route_segments": [
+          {
+            "day_index": 0,
+            "origin": "北京中心酒店",
+            "destination": "故宫博物院",
+            "route_type": "walking",
+            "distance_meters": 0.0,
+            "duration_minutes": 0,
+            "walking_distance_meters": 0.0,
+            "walking_duration_minutes": 0,
+            "transit_duration_minutes": 0,
+            "steps": [],
+            "description": "",
+            "planned_departure_time": "09:00",
+            "planned_arrival_time": "09:00"
+          },
+          {
+            "day_index": 0,
+            "origin": "故宫博物院",
+            "destination": "景山公园",
+            "route_type": "walking",
+            "distance_meters": 1004.3813099032063,
+            "duration_minutes": 15,
+            "walking_distance_meters": 1004.3813099032063,
+            "walking_duration_minutes": 0,
+            "transit_duration_minutes": 0,
+            "steps": [],
+            "description": "",
+            "planned_departure_time": "11:30",
+            "planned_arrival_time": "11:45"
+          },
+          {
+            "day_index": 0,
+            "origin": "景山公园",
+            "destination": "北京中心酒店",
+            "route_type": "walking",
+            "distance_meters": 1004.3813099032063,
+            "duration_minutes": 15,
+            "walking_distance_meters": 1004.3813099032063,
+            "walking_duration_minutes": 0,
+            "transit_duration_minutes": 0,
+            "steps": [],
+            "description": "",
+            "planned_departure_time": "14:15",
+            "planned_arrival_time": "14:30"
+          }
+        ],
+        "constraint_report": {
+          "passed": true,
+          "score": 1.0,
+          "items": [
+            {
+              "name": "每日景点数量",
+              "passed": true,
+              "actual": "每天2-5个景点",
+              "expected": "通常每天2-5个景点；往返交通超过120分钟的远距离景点可单独成日",
+              "severity": "info",
+              "message": "每日景点数量合理"
+            },
+            {
+              "name": "每日行程利用率",
+              "passed": true,
+              "actual": "Day1=61%",
+              "expected": "普通游览日目标利用率70%-90%",
+              "severity": "warning",
+              "message": "部分日期仍有空余时间，可继续添加同区域景点"
+            },
+            {
+              "name": "Opening-hours data coverage",
+              "passed": true,
+              "actual": "故宫博物院, 景山公园",
+              "expected": "Verify these attractions with the official source before departure",
+              "severity": "warning",
+              "message": "Some attractions have no reliable opening-hours data; they require confirmation"
+            },
+            {
+              "name": "每日区域聚合",
+              "passed": true,
+              "actual": "每天不超过2个区域",
+              "expected": "一天集中在1个主要区域，最多跨2个相邻区域",
+              "severity": "info",
+              "message": "路线区域集中"
+            },
+            {
+              "name": "每日行程时长",
+              "passed": true,
+              "actual": "最长390分钟",
+              "expected": "不超过540分钟",
+              "severity": "info",
+              "message": "每日游览、交通和缓冲时间在节奏预算内"
+            }
+          ]
+        },
+        "risk_warnings": [
+          "Day1行程利用率仅61%",
+          "天气存在降雨/恶劣风险，建议把室外景点和博物馆类景点互换。"
+        ],
+        "evidence_sources": [],
+        "planning_trace": [
+          {
+            "iteration": 1,
+            "role": "QualityRepairController",
+            "action": "ADD_WEATHER_BACKUP:中国国家博物馆",
+            "reason": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+            "score_before": 0.95,
+            "score_after": 1.0
+          }
+        ],
+        "candidate_debug": [],
+        "review_scores": {
+          "score": 96,
+          "route_score": 96,
+          "distance_score": 100,
+          "time_score": 100,
+          "experience_score": 88,
+          "preference_score": 0,
+          "diversity_score": 100,
+          "budget_score": 100,
+          "score_breakdown": {
+            "preference": 0.0,
+            "distance": 100.0,
+            "diversity": 100.0,
+            "budget": 100.0,
+            "time": 100.0,
+            "experience": 88.0
+          },
+          "warnings": [
+            "Day1行程利用率仅61%"
+          ]
+        },
+        "normalized_constraints": [
+          {
+            "type": "coverage",
+            "operator": "eq",
+            "value": 1,
+            "unit": "days",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "hard",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "transportation",
+            "operator": "require",
+            "value": "public transit",
+            "unit": "",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "hard",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "attraction_count",
+            "operator": "between",
+            "value": [
+              2,
+              5
+            ],
+            "unit": "pois/day",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "soft",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "max_areas",
+            "operator": "max",
+            "value": 2,
+            "unit": "areas/day",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "soft",
+            "source": "request",
+            "metadata": {}
+          }
+        ],
+        "validation_result": {
+          "valid": true,
+          "violations": [],
+          "checked_constraints": 4,
+          "score": 1.0
+        },
+        "failure_reason": null,
+        "quality_gate_passed": true,
+        "quality_evaluation": {
+          "pass": true,
+          "overall_score": 10.0,
+          "issues": [
+            {
+              "issue_type": "weather_risk",
+              "severity": "info",
+              "day": 1,
+              "evidence": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+              "repair_strategy": "ADD_WEATHER_BACKUP",
+              "affected_visit_keys": [
+                "provider:request-demo-1",
+                "provider:request-demo-2"
+              ],
+              "source": "deterministic",
+              "resolution_status": "mitigated",
+              "fingerprint": "6d0db926232cab10fd4c"
+            }
+          ],
+          "source": "deterministic",
+          "contract_errors": []
+        },
+        "unresolved_quality_issues": [],
+        "unresolved_blocking_issues": [],
+        "unresolved_non_blocking_issues": [],
+        "degraded_reason": null,
+        "suggested_alternatives": [
+          "雷阵雨：保留主计划，并在临近出发时按实时天气切换至室内备选（中国国家博物馆）。"
+        ],
+        "best_effort": false,
+        "repair_history": [
+          {
+            "iteration": 1,
+            "trigger_issue": {
+              "issue_type": "weather_risk",
+              "severity": "warning",
+              "day": 1,
+              "evidence": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+              "repair_strategy": "ADD_WEATHER_BACKUP",
+              "affected_visit_keys": [
+                "provider:request-demo-1",
+                "provider:request-demo-2"
+              ],
+              "source": "deterministic",
+              "resolution_status": "open",
+              "fingerprint": "6d0db926232cab10fd4c"
+            },
+            "issue_fingerprint": "6d0db926232cab10fd4c",
+            "selected_action": "ADD_WEATHER_BACKUP:中国国家博物馆",
+            "action_result": "accepted; plan revalidated",
+            "accepted": true,
+            "rejection_reason": "",
+            "changes": [
+              {
+                "day": 1,
+                "before_pois": [
+                  "故宫博物院",
+                  "景山公园"
+                ],
+                "after_pois": [
+                  "故宫博物院",
+                  "景山公园"
+                ],
+                "before_hotel": "北京中心酒店",
+                "after_hotel": "北京中心酒店",
+                "before_weather_backup": [],
+                "after_weather_backup": [
+                  "中国国家博物馆"
+                ],
+                "details": "雷阵雨：保留主计划，并在临近出发时按实时天气切换至室内备选（中国国家博物馆）。"
+              }
+            ],
+            "constraint_pass_before": true,
+            "constraint_pass_after": true,
+            "quality_score_before": 9.5,
+            "quality_score_after": 10.0,
+            "issues_before": [
+              {
+                "issue_type": "weather_risk",
+                "severity": "warning",
+                "day": 1,
+                "evidence": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+                "repair_strategy": "ADD_WEATHER_BACKUP",
+                "affected_visit_keys": [
+                  "provider:request-demo-1",
+                  "provider:request-demo-2"
+                ],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "6d0db926232cab10fd4c"
+              }
+            ],
+            "issues_after": [
+              {
+                "issue_type": "weather_risk",
+                "severity": "info",
+                "day": 1,
+                "evidence": "雷阵雨 affects outdoor primary visits: 故宫博物院, 景山公园",
+                "repair_strategy": "ADD_WEATHER_BACKUP",
+                "affected_visit_keys": [
+                  "provider:request-demo-1",
+                  "provider:request-demo-2"
+                ],
+                "source": "deterministic",
+                "resolution_status": "mitigated",
+                "fingerprint": "6d0db926232cab10fd4c"
+              }
+            ]
+          }
+        ],
+        "observability_trace": null
+      },
+      "session_id": null,
+      "plan_version": null,
+      "workflow": null
+    }
+  },
+  {
+    "name": "hangzhou_heat_without_indoor_candidate",
+    "request": {
+      "city": "杭州",
+      "start_date": "2026-08-09",
+      "end_date": "2026-08-09",
+      "travel_days": 1,
+      "transportation": "public transit",
+      "accommodation": "economy hotel",
+      "preferences": [
+        "自然风光"
+      ],
+      "free_text_input": "",
+      "budget_limit": null,
+      "pace": "relaxed",
+      "must_visit": [],
+      "avoid_categories": [],
+      "dietary_restrictions": [],
+      "max_daily_walk_km": null,
+      "hotel_area": "",
+      "travelers": [],
+      "energy_preference": null,
+      "daily_start_time": null,
+      "daily_end_time": null,
+      "arrival_time": null,
+      "departure_time": null,
+      "hard_constraints": [],
+      "soft_preferences": [],
+      "first_visit": null,
+      "prefer_classic": null
+    },
+    "issues_before": {
+      "pass": true,
+      "overall_score": 9.5,
+      "issues": [
+        {
+          "issue_type": "weather_risk",
+          "severity": "warning",
+          "day": 1,
+          "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+          "repair_strategy": "ADD_WEATHER_BACKUP",
+          "affected_visit_keys": [
+            "provider:request-demo-11",
+            "provider:request-demo-12"
+          ],
+          "source": "deterministic",
+          "resolution_status": "open",
+          "fingerprint": "5e4f51de1949b8042ba9"
+        }
+      ],
+      "source": "deterministic",
+      "contract_errors": []
+    },
+    "repair_trace": [
+      {
+        "repair_action": "ADD_WEATHER_BACKUP:warning_only",
+        "action_result": "accepted; plan revalidated",
+        "accepted": true,
+        "rejected_reason": "",
+        "issues_before": [
+          {
+            "issue_type": "weather_risk",
+            "severity": "warning",
+            "day": 1,
+            "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+            "repair_strategy": "ADD_WEATHER_BACKUP",
+            "affected_visit_keys": [
+              "provider:request-demo-11",
+              "provider:request-demo-12"
+            ],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "5e4f51de1949b8042ba9"
+          }
+        ],
+        "issues_after": [
+          {
+            "issue_type": "weather_risk",
+            "severity": "warning",
+            "day": 1,
+            "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+            "repair_strategy": "ADD_WEATHER_BACKUP",
+            "affected_visit_keys": [
+              "provider:request-demo-11",
+              "provider:request-demo-12"
+            ],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "5e4f51de1949b8042ba9"
+          }
+        ]
+      }
+    ],
+    "issues_after": {
+      "pass": true,
+      "overall_score": 9.5,
+      "issues": [
+        {
+          "issue_type": "weather_risk",
+          "severity": "warning",
+          "day": 1,
+          "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+          "repair_strategy": "ADD_WEATHER_BACKUP",
+          "affected_visit_keys": [
+            "provider:request-demo-11",
+            "provider:request-demo-12"
+          ],
+          "source": "deterministic",
+          "resolution_status": "unresolved_non_blocking",
+          "fingerprint": "5e4f51de1949b8042ba9"
+        }
+      ],
+      "source": "deterministic",
+      "contract_errors": []
+    },
+    "final_gate_decision": {
+      "pass": true,
+      "blocking_count": 0,
+      "warning_count": 1,
+      "degraded_reason": null,
+      "best_effort": true
+    },
+    "complete_user_response": {
+      "success": true,
+      "message": "旅行计划已生成，并保留未解决的非阻断提示",
+      "data": {
+        "city": "杭州",
+        "start_date": "2026-08-09",
+        "end_date": "2026-08-09",
+        "days": [
+          {
+            "date": "2026-08-09",
+            "day_index": 0,
+            "description": "根据用户请求生成的首选行程",
+            "transportation": "public transit",
+            "accommodation": "economy hotel",
+            "hotel": {
+              "name": "杭州中心酒店",
+              "address": "",
+              "location": {
+                "longitude": 120.145,
+                "latitude": 30.247
+              },
+              "price_range": "",
+              "rating": "",
+              "distance": "",
+              "type": "economy hotel",
+              "estimated_cost": 360,
+              "selection_score": 0.0,
+              "score_breakdown": {}
+            },
+            "attractions": [
+              {
+                "name": "西湖苏堤",
+                "address": "",
+                "location": {
+                  "longitude": 120.145,
+                  "latitude": 30.247
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "park",
+                "categories": [
+                  "park"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-11",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-11",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 79.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": "09:00",
+                "planned_departure_time": "11:30",
+                "opening_hours_status": "unknown"
+              },
+              {
+                "name": "龙井村",
+                "address": "",
+                "location": {
+                  "longitude": 120.105,
+                  "latitude": 30.224
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "natural",
+                "categories": [
+                  "natural"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-12",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-12",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 78.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": "11:59",
+                "planned_departure_time": "14:29",
+                "opening_hours_status": "unknown"
+              }
+            ],
+            "meals": [],
+            "route_segments": [
+              {
+                "day_index": 0,
+                "origin": "杭州中心酒店",
+                "destination": "西湖苏堤",
+                "route_type": "walking",
+                "distance_meters": 0.0,
+                "duration_minutes": 0,
+                "walking_distance_meters": 0.0,
+                "walking_duration_minutes": 0,
+                "transit_duration_minutes": 0,
+                "steps": [],
+                "description": "",
+                "planned_departure_time": "09:00",
+                "planned_arrival_time": "09:00"
+              },
+              {
+                "day_index": 0,
+                "origin": "西湖苏堤",
+                "destination": "龙井村",
+                "route_type": "transit",
+                "distance_meters": 4615.984103912559,
+                "duration_minutes": 29,
+                "walking_distance_meters": 692.3976155868837,
+                "walking_duration_minutes": 0,
+                "transit_duration_minutes": 0,
+                "steps": [],
+                "description": "",
+                "planned_departure_time": "11:30",
+                "planned_arrival_time": "11:59"
+              },
+              {
+                "day_index": 0,
+                "origin": "龙井村",
+                "destination": "杭州中心酒店",
+                "route_type": "transit",
+                "distance_meters": 4615.984103912559,
+                "duration_minutes": 29,
+                "walking_distance_meters": 692.3976155868837,
+                "walking_duration_minutes": 0,
+                "transit_duration_minutes": 0,
+                "steps": [],
+                "description": "",
+                "planned_departure_time": "14:29",
+                "planned_arrival_time": "14:58"
+              }
+            ],
+            "schedule_blocks": [],
+            "max_walking_leg_minutes": null,
+            "daily_distance_km": 9.23,
+            "daily_walking_distance_km": 1.38,
+            "daily_visit_minutes": 300,
+            "daily_travel_minutes": 58,
+            "daily_buffer_minutes": 60,
+            "daily_meal_minutes": 0,
+            "daily_duration_minutes": 418,
+            "daily_elapsed_minutes": 358,
+            "day_utilization_score": 85.2,
+            "daily_cost": 417,
+            "planned_start_time": "09:00",
+            "planned_end_time": "14:58",
+            "available_minutes": 660,
+            "partial_day_reason": null,
+            "primary_plan": [
+              {
+                "name": "西湖苏堤",
+                "address": "",
+                "location": {
+                  "longitude": 120.145,
+                  "latitude": 30.247
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "park",
+                "categories": [
+                  "park"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-11",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-11",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 79.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": "09:00",
+                "planned_departure_time": "11:30",
+                "opening_hours_status": "unknown"
+              },
+              {
+                "name": "龙井村",
+                "address": "",
+                "location": {
+                  "longitude": 120.105,
+                  "latitude": 30.224
+                },
+                "coordinates": [],
+                "visit_duration": 150,
+                "suggested_duration_minutes": 150,
+                "description": "",
+                "category": "natural",
+                "categories": [
+                  "natural"
+                ],
+                "tags": [],
+                "area": "",
+                "popularity": 8,
+                "first_visit_priority": 5,
+                "is_core_landmark": false,
+                "crowd_level": 5,
+                "intensity_level": "medium",
+                "estimated_internal_walking_km": 0.5,
+                "accessible": null,
+                "rating": null,
+                "photos": [],
+                "poi_id": "request-demo-12",
+                "parent_poi_id": "",
+                "visit_key": "provider:request-demo-12",
+                "image_url": null,
+                "ticket_price": 0,
+                "score": 78.0,
+                "recall_sources": [],
+                "score_breakdown": {},
+                "opening_hours": "",
+                "opening_time": null,
+                "closing_time": null,
+                "latest_entry_time": null,
+                "hours_source": "unknown",
+                "planned_arrival_time": "11:59",
+                "planned_departure_time": "14:29",
+                "opening_hours_status": "unknown"
+              }
+            ],
+            "weather_backup": [],
+            "weather_warning": "高温：当前候选池没有可靠室内备选；保留主计划，请在出发前查看实时天气并准备雨具、防晒或缩短户外停留。"
+          }
+        ],
+        "weather_info": [
+          {
+            "date": "2026-08-09",
+            "day_weather": "高温",
+            "night_weather": "",
+            "day_temp": 0,
+            "night_temp": 0,
+            "wind_direction": "",
+            "wind_power": ""
+          }
+        ],
+        "overall_suggestions": "按实时开放信息和天气执行。",
+        "budget": {
+          "total_attractions": 0,
+          "total_hotels": 360,
+          "total_meals": 0,
+          "total_transportation": 57,
+          "total": 417,
+          "budget_limit": null,
+          "remaining": null
+        },
+        "route_segments": [
+          {
+            "day_index": 0,
+            "origin": "杭州中心酒店",
+            "destination": "西湖苏堤",
+            "route_type": "walking",
+            "distance_meters": 0.0,
+            "duration_minutes": 0,
+            "walking_distance_meters": 0.0,
+            "walking_duration_minutes": 0,
+            "transit_duration_minutes": 0,
+            "steps": [],
+            "description": "",
+            "planned_departure_time": "09:00",
+            "planned_arrival_time": "09:00"
+          },
+          {
+            "day_index": 0,
+            "origin": "西湖苏堤",
+            "destination": "龙井村",
+            "route_type": "transit",
+            "distance_meters": 4615.984103912559,
+            "duration_minutes": 29,
+            "walking_distance_meters": 692.3976155868837,
+            "walking_duration_minutes": 0,
+            "transit_duration_minutes": 0,
+            "steps": [],
+            "description": "",
+            "planned_departure_time": "11:30",
+            "planned_arrival_time": "11:59"
+          },
+          {
+            "day_index": 0,
+            "origin": "龙井村",
+            "destination": "杭州中心酒店",
+            "route_type": "transit",
+            "distance_meters": 4615.984103912559,
+            "duration_minutes": 29,
+            "walking_distance_meters": 692.3976155868837,
+            "walking_duration_minutes": 0,
+            "transit_duration_minutes": 0,
+            "steps": [],
+            "description": "",
+            "planned_departure_time": "14:29",
+            "planned_arrival_time": "14:58"
+          }
+        ],
+        "constraint_report": {
+          "passed": true,
+          "score": 1.0,
+          "items": [
+            {
+              "name": "每日景点数量",
+              "passed": true,
+              "actual": "每天2-5个景点",
+              "expected": "通常每天2-5个景点；往返交通超过120分钟的远距离景点可单独成日",
+              "severity": "info",
+              "message": "每日景点数量合理"
+            },
+            {
+              "name": "每日行程利用率",
+              "passed": true,
+              "actual": "所有普通游览日达到70%",
+              "expected": "普通游览日目标利用率70%-90%",
+              "severity": "info",
+              "message": "每日时间利用充分"
+            },
+            {
+              "name": "Opening-hours data coverage",
+              "passed": true,
+              "actual": "西湖苏堤, 龙井村",
+              "expected": "Verify these attractions with the official source before departure",
+              "severity": "warning",
+              "message": "Some attractions have no reliable opening-hours data; they require confirmation"
+            },
+            {
+              "name": "每日区域聚合",
+              "passed": true,
+              "actual": "每天不超过2个区域",
+              "expected": "一天集中在1个主要区域，最多跨2个相邻区域",
+              "severity": "info",
+              "message": "路线区域集中"
+            },
+            {
+              "name": "每日行程时长",
+              "passed": true,
+              "actual": "最长418分钟",
+              "expected": "不超过420分钟",
+              "severity": "info",
+              "message": "每日游览、交通和缓冲时间在节奏预算内"
+            }
+          ]
+        },
+        "risk_warnings": [
+          "高温 affects outdoor primary visits: 西湖苏堤, 龙井村"
+        ],
+        "evidence_sources": [],
+        "planning_trace": [
+          {
+            "iteration": 1,
+            "role": "QualityRepairController",
+            "action": "ADD_WEATHER_BACKUP:warning_only",
+            "reason": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+            "score_before": 0.95,
+            "score_after": 0.95
+          }
+        ],
+        "candidate_debug": [],
+        "review_scores": {
+          "score": 89,
+          "route_score": 89,
+          "distance_score": 100,
+          "time_score": 78,
+          "experience_score": 78,
+          "preference_score": 0,
+          "diversity_score": 100,
+          "budget_score": 100,
+          "score_breakdown": {
+            "preference": 0.0,
+            "distance": 100.0,
+            "diversity": 100.0,
+            "budget": 100.0,
+            "time": 78.0,
+            "experience": 78.0
+          },
+          "warnings": []
+        },
+        "normalized_constraints": [
+          {
+            "type": "coverage",
+            "operator": "eq",
+            "value": 1,
+            "unit": "days",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "hard",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "transportation",
+            "operator": "require",
+            "value": "public transit",
+            "unit": "",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "hard",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "attraction_count",
+            "operator": "between",
+            "value": [
+              2,
+              5
+            ],
+            "unit": "pois/day",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "soft",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "max_areas",
+            "operator": "max",
+            "value": 2,
+            "unit": "areas/day",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "soft",
+            "source": "request",
+            "metadata": {}
+          }
+        ],
+        "validation_result": {
+          "valid": true,
+          "violations": [],
+          "checked_constraints": 4,
+          "score": 1.0
+        },
+        "failure_reason": null,
+        "quality_gate_passed": true,
+        "quality_evaluation": {
+          "pass": true,
+          "overall_score": 9.5,
+          "issues": [
+            {
+              "issue_type": "weather_risk",
+              "severity": "warning",
+              "day": 1,
+              "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+              "repair_strategy": "ADD_WEATHER_BACKUP",
+              "affected_visit_keys": [
+                "provider:request-demo-11",
+                "provider:request-demo-12"
+              ],
+              "source": "deterministic",
+              "resolution_status": "unresolved_non_blocking",
+              "fingerprint": "5e4f51de1949b8042ba9"
+            }
+          ],
+          "source": "deterministic",
+          "contract_errors": []
+        },
+        "unresolved_quality_issues": [
+          {
+            "issue_type": "weather_risk",
+            "severity": "warning",
+            "day": 1,
+            "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+            "repair_strategy": "ADD_WEATHER_BACKUP",
+            "affected_visit_keys": [
+              "provider:request-demo-11",
+              "provider:request-demo-12"
+            ],
+            "source": "deterministic",
+            "resolution_status": "unresolved_non_blocking",
+            "fingerprint": "5e4f51de1949b8042ba9"
+          }
+        ],
+        "unresolved_blocking_issues": [],
+        "unresolved_non_blocking_issues": [
+          {
+            "issue_type": "weather_risk",
+            "severity": "warning",
+            "day": 1,
+            "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+            "repair_strategy": "ADD_WEATHER_BACKUP",
+            "affected_visit_keys": [
+              "provider:request-demo-11",
+              "provider:request-demo-12"
+            ],
+            "source": "deterministic",
+            "resolution_status": "unresolved_non_blocking",
+            "fingerprint": "5e4f51de1949b8042ba9"
+          }
+        ],
+        "degraded_reason": null,
+        "suggested_alternatives": [
+          "可选改进：高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+          "高温：当前候选池没有可靠室内备选；保留主计划，请在出发前查看实时天气并准备雨具、防晒或缩短户外停留。"
+        ],
+        "best_effort": true,
+        "repair_history": [
+          {
+            "iteration": 1,
+            "trigger_issue": {
+              "issue_type": "weather_risk",
+              "severity": "warning",
+              "day": 1,
+              "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+              "repair_strategy": "ADD_WEATHER_BACKUP",
+              "affected_visit_keys": [
+                "provider:request-demo-11",
+                "provider:request-demo-12"
+              ],
+              "source": "deterministic",
+              "resolution_status": "open",
+              "fingerprint": "5e4f51de1949b8042ba9"
+            },
+            "issue_fingerprint": "5e4f51de1949b8042ba9",
+            "selected_action": "ADD_WEATHER_BACKUP:warning_only",
+            "action_result": "accepted; plan revalidated",
+            "accepted": true,
+            "rejection_reason": "",
+            "changes": [
+              {
+                "day": 1,
+                "before_pois": [
+                  "西湖苏堤",
+                  "龙井村"
+                ],
+                "after_pois": [
+                  "西湖苏堤",
+                  "龙井村"
+                ],
+                "before_hotel": "杭州中心酒店",
+                "after_hotel": "杭州中心酒店",
+                "before_weather_backup": [],
+                "after_weather_backup": [],
+                "details": "高温：当前候选池没有可靠室内备选；保留主计划，请在出发前查看实时天气并准备雨具、防晒或缩短户外停留。"
+              }
+            ],
+            "constraint_pass_before": true,
+            "constraint_pass_after": true,
+            "quality_score_before": 9.5,
+            "quality_score_after": 9.5,
+            "issues_before": [
+              {
+                "issue_type": "weather_risk",
+                "severity": "warning",
+                "day": 1,
+                "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+                "repair_strategy": "ADD_WEATHER_BACKUP",
+                "affected_visit_keys": [
+                  "provider:request-demo-11",
+                  "provider:request-demo-12"
+                ],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "5e4f51de1949b8042ba9"
+              }
+            ],
+            "issues_after": [
+              {
+                "issue_type": "weather_risk",
+                "severity": "warning",
+                "day": 1,
+                "evidence": "高温 affects outdoor primary visits: 西湖苏堤, 龙井村",
+                "repair_strategy": "ADD_WEATHER_BACKUP",
+                "affected_visit_keys": [
+                  "provider:request-demo-11",
+                  "provider:request-demo-12"
+                ],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "5e4f51de1949b8042ba9"
+              }
+            ]
+          }
+        ],
+        "observability_trace": null
+      },
+      "session_id": null,
+      "plan_version": null,
+      "workflow": null
+    }
+  },
+  {
+    "name": "shanghai_candidate_outage_empty_full_day",
+    "request": {
+      "city": "上海",
+      "start_date": "2026-08-10",
+      "end_date": "2026-08-10",
+      "travel_days": 1,
+      "transportation": "public transit",
+      "accommodation": "economy hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "budget_limit": null,
+      "pace": "balanced",
+      "must_visit": [
+        "外滩"
+      ],
+      "avoid_categories": [],
+      "dietary_restrictions": [],
+      "max_daily_walk_km": null,
+      "hotel_area": "",
+      "travelers": [],
+      "energy_preference": null,
+      "daily_start_time": null,
+      "daily_end_time": null,
+      "arrival_time": null,
+      "departure_time": null,
+      "hard_constraints": [],
+      "soft_preferences": [],
+      "first_visit": null,
+      "prefer_classic": null
+    },
+    "issues_before": {
+      "pass": false,
+      "overall_score": 2.5,
+      "issues": [
+        {
+          "issue_type": "empty_day",
+          "severity": "critical",
+          "day": 1,
+          "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+          "repair_strategy": "ADD_UNUSED_CANDIDATE",
+          "affected_visit_keys": [],
+          "source": "deterministic",
+          "resolution_status": "open",
+          "fingerprint": "37f70034a3125abfb9c8"
+        },
+        {
+          "issue_type": "constraint_failure",
+          "severity": "critical",
+          "day": null,
+          "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+          "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+          "affected_visit_keys": [],
+          "source": "deterministic",
+          "resolution_status": "open",
+          "fingerprint": "fa073b0745c933923a3a"
+        },
+        {
+          "issue_type": "missing_must_visit",
+          "severity": "critical",
+          "day": null,
+          "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+          "repair_strategy": "ADD_MUST_VISIT",
+          "affected_visit_keys": [],
+          "source": "deterministic",
+          "resolution_status": "open",
+          "fingerprint": "cc12a381ffbde3e16422"
+        }
+      ],
+      "source": "deterministic",
+      "contract_errors": []
+    },
+    "repair_trace": [
+      {
+        "repair_action": "no_legal_repair_available",
+        "action_result": "No supported mutation was available",
+        "accepted": false,
+        "rejected_reason": "No repair could be produced from the existing candidate pool and deterministic planner actions",
+        "issues_before": [
+          {
+            "issue_type": "empty_day",
+            "severity": "critical",
+            "day": 1,
+            "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+            "repair_strategy": "ADD_UNUSED_CANDIDATE",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "37f70034a3125abfb9c8"
+          },
+          {
+            "issue_type": "constraint_failure",
+            "severity": "critical",
+            "day": null,
+            "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+            "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "fa073b0745c933923a3a"
+          },
+          {
+            "issue_type": "missing_must_visit",
+            "severity": "critical",
+            "day": null,
+            "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+            "repair_strategy": "ADD_MUST_VISIT",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "cc12a381ffbde3e16422"
+          }
+        ],
+        "issues_after": [
+          {
+            "issue_type": "empty_day",
+            "severity": "critical",
+            "day": 1,
+            "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+            "repair_strategy": "ADD_UNUSED_CANDIDATE",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "37f70034a3125abfb9c8"
+          },
+          {
+            "issue_type": "constraint_failure",
+            "severity": "critical",
+            "day": null,
+            "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+            "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "fa073b0745c933923a3a"
+          },
+          {
+            "issue_type": "missing_must_visit",
+            "severity": "critical",
+            "day": null,
+            "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+            "repair_strategy": "ADD_MUST_VISIT",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "cc12a381ffbde3e16422"
+          }
+        ]
+      },
+      {
+        "repair_action": "no_legal_repair_available",
+        "action_result": "No supported mutation was available",
+        "accepted": false,
+        "rejected_reason": "No repair could be produced from the existing candidate pool and deterministic planner actions",
+        "issues_before": [
+          {
+            "issue_type": "empty_day",
+            "severity": "critical",
+            "day": 1,
+            "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+            "repair_strategy": "ADD_UNUSED_CANDIDATE",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "37f70034a3125abfb9c8"
+          },
+          {
+            "issue_type": "constraint_failure",
+            "severity": "critical",
+            "day": null,
+            "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+            "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "fa073b0745c933923a3a"
+          },
+          {
+            "issue_type": "missing_must_visit",
+            "severity": "critical",
+            "day": null,
+            "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+            "repair_strategy": "ADD_MUST_VISIT",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "cc12a381ffbde3e16422"
+          }
+        ],
+        "issues_after": [
+          {
+            "issue_type": "empty_day",
+            "severity": "critical",
+            "day": 1,
+            "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+            "repair_strategy": "ADD_UNUSED_CANDIDATE",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "37f70034a3125abfb9c8"
+          },
+          {
+            "issue_type": "constraint_failure",
+            "severity": "critical",
+            "day": null,
+            "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+            "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "fa073b0745c933923a3a"
+          },
+          {
+            "issue_type": "missing_must_visit",
+            "severity": "critical",
+            "day": null,
+            "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+            "repair_strategy": "ADD_MUST_VISIT",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "cc12a381ffbde3e16422"
+          }
+        ]
+      },
+      {
+        "repair_action": "no_legal_repair_available",
+        "action_result": "No supported mutation was available",
+        "accepted": false,
+        "rejected_reason": "No repair could be produced from the existing candidate pool and deterministic planner actions",
+        "issues_before": [
+          {
+            "issue_type": "empty_day",
+            "severity": "critical",
+            "day": 1,
+            "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+            "repair_strategy": "ADD_UNUSED_CANDIDATE",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "37f70034a3125abfb9c8"
+          },
+          {
+            "issue_type": "constraint_failure",
+            "severity": "critical",
+            "day": null,
+            "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+            "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "fa073b0745c933923a3a"
+          },
+          {
+            "issue_type": "missing_must_visit",
+            "severity": "critical",
+            "day": null,
+            "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+            "repair_strategy": "ADD_MUST_VISIT",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "cc12a381ffbde3e16422"
+          }
+        ],
+        "issues_after": [
+          {
+            "issue_type": "empty_day",
+            "severity": "critical",
+            "day": 1,
+            "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+            "repair_strategy": "ADD_UNUSED_CANDIDATE",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "37f70034a3125abfb9c8"
+          },
+          {
+            "issue_type": "constraint_failure",
+            "severity": "critical",
+            "day": null,
+            "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+            "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "fa073b0745c933923a3a"
+          },
+          {
+            "issue_type": "missing_must_visit",
+            "severity": "critical",
+            "day": null,
+            "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+            "repair_strategy": "ADD_MUST_VISIT",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "open",
+            "fingerprint": "cc12a381ffbde3e16422"
+          }
+        ]
+      }
+    ],
+    "issues_after": {
+      "pass": false,
+      "overall_score": 2.5,
+      "issues": [
+        {
+          "issue_type": "empty_day",
+          "severity": "critical",
+          "day": 1,
+          "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+          "repair_strategy": "ADD_UNUSED_CANDIDATE",
+          "affected_visit_keys": [],
+          "source": "deterministic",
+          "resolution_status": "unresolved_blocking",
+          "fingerprint": "37f70034a3125abfb9c8"
+        },
+        {
+          "issue_type": "constraint_failure",
+          "severity": "critical",
+          "day": null,
+          "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+          "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+          "affected_visit_keys": [],
+          "source": "deterministic",
+          "resolution_status": "unresolved_blocking",
+          "fingerprint": "fa073b0745c933923a3a"
+        },
+        {
+          "issue_type": "missing_must_visit",
+          "severity": "critical",
+          "day": null,
+          "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+          "repair_strategy": "ADD_MUST_VISIT",
+          "affected_visit_keys": [],
+          "source": "deterministic",
+          "resolution_status": "unresolved_blocking",
+          "fingerprint": "cc12a381ffbde3e16422"
+        }
+      ],
+      "source": "deterministic",
+      "contract_errors": []
+    },
+    "final_gate_decision": {
+      "pass": false,
+      "blocking_count": 3,
+      "warning_count": 0,
+      "degraded_reason": "Quality gate unresolved after bounded repair: empty_day(Day 1): Day 1 has no scheduled activities during a usable destination-day window; constraint_failure: 需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩; missing_must_visit: Required attraction 外滩 is absent; matching candidates=0",
+      "best_effort": true
+    },
+    "complete_user_response": {
+      "success": false,
+      "message": "已返回包含完整 TripPlan 的 degraded best-effort 结果",
+      "data": {
+        "city": "上海",
+        "start_date": "2026-08-10",
+        "end_date": "2026-08-10",
+        "days": [
+          {
+            "date": "2026-08-10",
+            "day_index": 0,
+            "description": "根据用户请求生成的首选行程",
+            "transportation": "public transit",
+            "accommodation": "economy hotel",
+            "hotel": {
+              "name": "上海中心酒店",
+              "address": "",
+              "location": {
+                "longitude": 116.4,
+                "latitude": 39.9
+              },
+              "price_range": "",
+              "rating": "",
+              "distance": "",
+              "type": "economy hotel",
+              "estimated_cost": 360,
+              "selection_score": 0.0,
+              "score_breakdown": {}
+            },
+            "attractions": [],
+            "meals": [],
+            "route_segments": [
+              {
+                "day_index": 0,
+                "origin": "上海中心酒店",
+                "destination": "上海中心酒店",
+                "route_type": "walking",
+                "distance_meters": 0.0,
+                "duration_minutes": 0,
+                "walking_distance_meters": 0.0,
+                "walking_duration_minutes": 0,
+                "transit_duration_minutes": 0,
+                "steps": [],
+                "description": "",
+                "planned_departure_time": null,
+                "planned_arrival_time": null
+              }
+            ],
+            "schedule_blocks": [],
+            "max_walking_leg_minutes": null,
+            "daily_distance_km": 0.0,
+            "daily_walking_distance_km": 0.0,
+            "daily_visit_minutes": 0,
+            "daily_travel_minutes": 0,
+            "daily_buffer_minutes": 0,
+            "daily_meal_minutes": 0,
+            "daily_duration_minutes": 0,
+            "daily_elapsed_minutes": 0,
+            "day_utilization_score": 0.0,
+            "daily_cost": 390,
+            "planned_start_time": "09:00",
+            "planned_end_time": "09:00",
+            "available_minutes": 660,
+            "partial_day_reason": null,
+            "primary_plan": [],
+            "weather_backup": [],
+            "weather_warning": ""
+          }
+        ],
+        "weather_info": [
+          {
+            "date": "2026-08-10",
+            "day_weather": "多云",
+            "night_weather": "",
+            "day_temp": 0,
+            "night_temp": 0,
+            "wind_direction": "",
+            "wind_power": ""
+          }
+        ],
+        "overall_suggestions": "按实时开放信息和天气执行。",
+        "budget": {
+          "total_attractions": 0,
+          "total_hotels": 360,
+          "total_meals": 0,
+          "total_transportation": 30,
+          "total": 390,
+          "budget_limit": null,
+          "remaining": null
+        },
+        "route_segments": [
+          {
+            "day_index": 0,
+            "origin": "上海中心酒店",
+            "destination": "上海中心酒店",
+            "route_type": "walking",
+            "distance_meters": 0.0,
+            "duration_minutes": 0,
+            "walking_distance_meters": 0.0,
+            "walking_duration_minutes": 0,
+            "transit_duration_minutes": 0,
+            "steps": [],
+            "description": "",
+            "planned_departure_time": null,
+            "planned_arrival_time": null
+          }
+        ],
+        "constraint_report": {
+          "passed": false,
+          "score": 0.73,
+          "items": [
+            {
+              "name": "必去景点：外滩",
+              "passed": false,
+              "actual": "未安排",
+              "expected": "必须出现在行程中",
+              "severity": "blocker",
+              "message": "需要在重规划中优先加入"
+            },
+            {
+              "name": "每日景点数量",
+              "passed": true,
+              "actual": "每天2-5个景点",
+              "expected": "通常每天2-5个景点；往返交通超过120分钟的远距离景点可单独成日",
+              "severity": "info",
+              "message": "每日景点数量合理"
+            },
+            {
+              "name": "每日行程利用率",
+              "passed": true,
+              "actual": "所有普通游览日达到70%",
+              "expected": "普通游览日目标利用率70%-90%",
+              "severity": "info",
+              "message": "每日时间利用充分"
+            },
+            {
+              "name": "每日区域聚合",
+              "passed": true,
+              "actual": "每天不超过2个区域",
+              "expected": "一天集中在1个主要区域，最多跨2个相邻区域",
+              "severity": "info",
+              "message": "路线区域集中"
+            },
+            {
+              "name": "每日行程时长",
+              "passed": true,
+              "actual": "最长0分钟",
+              "expected": "不超过540分钟",
+              "severity": "info",
+              "message": "每日游览、交通和缓冲时间在节奏预算内"
+            },
+            {
+              "name": "Constraint:MUST_VISIT",
+              "passed": false,
+              "actual": "None",
+              "expected": "外滩",
+              "severity": "blocker",
+              "message": "缺少必去景点：外滩"
+            },
+            {
+              "name": "Constraint:ATTRACTION_COUNT",
+              "passed": false,
+              "actual": "0",
+              "expected": "[2, 5]",
+              "severity": "warning",
+              "message": "Day1安排0个景点"
+            }
+          ]
+        },
+        "risk_warnings": [
+          "质量门未通过，当前结果为 degraded，不应视为完整可执行方案。"
+        ],
+        "evidence_sources": [],
+        "planning_trace": [],
+        "candidate_debug": [],
+        "review_scores": {
+          "score": 100,
+          "route_score": 100,
+          "distance_score": 100,
+          "time_score": 100,
+          "experience_score": 100,
+          "preference_score": 100,
+          "diversity_score": 100,
+          "budget_score": 100,
+          "score_breakdown": {},
+          "warnings": []
+        },
+        "normalized_constraints": [
+          {
+            "type": "must_visit",
+            "operator": "require",
+            "value": "外滩",
+            "unit": "",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "hard",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "coverage",
+            "operator": "eq",
+            "value": 1,
+            "unit": "days",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "hard",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "transportation",
+            "operator": "require",
+            "value": "public transit",
+            "unit": "",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "hard",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "attraction_count",
+            "operator": "between",
+            "value": [
+              2,
+              5
+            ],
+            "unit": "pois/day",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "soft",
+            "source": "request",
+            "metadata": {}
+          },
+          {
+            "type": "max_areas",
+            "operator": "max",
+            "value": 2,
+            "unit": "areas/day",
+            "start": null,
+            "end": null,
+            "reason": "",
+            "severity": "soft",
+            "source": "request",
+            "metadata": {}
+          }
+        ],
+        "validation_result": {
+          "valid": false,
+          "violations": [
+            {
+              "type": "MUST_VISIT",
+              "constraint_type": "must_visit",
+              "day": null,
+              "message": "缺少必去景点：外滩",
+              "actual": null,
+              "expected": "外滩",
+              "severity": "hard",
+              "repair_hint": "优先加入该景点并重新分配日期",
+              "poi_name": "外滩"
+            },
+            {
+              "type": "ATTRACTION_COUNT",
+              "constraint_type": "attraction_count",
+              "day": 1,
+              "message": "Day1安排0个景点",
+              "actual": 0,
+              "expected": [
+                2,
+                5
+              ],
+              "severity": "soft",
+              "repair_hint": "按剩余时间补点或删除最低优先级景点",
+              "poi_name": null
+            }
+          ],
+          "checked_constraints": 5,
+          "score": 0.73
+        },
+        "failure_reason": "Quality gate unresolved after bounded repair: empty_day(Day 1): Day 1 has no scheduled activities during a usable destination-day window; constraint_failure: 需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩; missing_must_visit: Required attraction 外滩 is absent; matching candidates=0",
+        "quality_gate_passed": false,
+        "quality_evaluation": {
+          "pass": false,
+          "overall_score": 2.5,
+          "issues": [
+            {
+              "issue_type": "empty_day",
+              "severity": "critical",
+              "day": 1,
+              "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+              "repair_strategy": "ADD_UNUSED_CANDIDATE",
+              "affected_visit_keys": [],
+              "source": "deterministic",
+              "resolution_status": "unresolved_blocking",
+              "fingerprint": "37f70034a3125abfb9c8"
+            },
+            {
+              "issue_type": "constraint_failure",
+              "severity": "critical",
+              "day": null,
+              "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+              "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+              "affected_visit_keys": [],
+              "source": "deterministic",
+              "resolution_status": "unresolved_blocking",
+              "fingerprint": "fa073b0745c933923a3a"
+            },
+            {
+              "issue_type": "missing_must_visit",
+              "severity": "critical",
+              "day": null,
+              "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+              "repair_strategy": "ADD_MUST_VISIT",
+              "affected_visit_keys": [],
+              "source": "deterministic",
+              "resolution_status": "unresolved_blocking",
+              "fingerprint": "cc12a381ffbde3e16422"
+            }
+          ],
+          "source": "deterministic",
+          "contract_errors": []
+        },
+        "unresolved_quality_issues": [
+          {
+            "issue_type": "empty_day",
+            "severity": "critical",
+            "day": 1,
+            "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+            "repair_strategy": "ADD_UNUSED_CANDIDATE",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "unresolved_blocking",
+            "fingerprint": "37f70034a3125abfb9c8"
+          },
+          {
+            "issue_type": "constraint_failure",
+            "severity": "critical",
+            "day": null,
+            "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+            "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "unresolved_blocking",
+            "fingerprint": "fa073b0745c933923a3a"
+          },
+          {
+            "issue_type": "missing_must_visit",
+            "severity": "critical",
+            "day": null,
+            "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+            "repair_strategy": "ADD_MUST_VISIT",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "unresolved_blocking",
+            "fingerprint": "cc12a381ffbde3e16422"
+          }
+        ],
+        "unresolved_blocking_issues": [
+          {
+            "issue_type": "empty_day",
+            "severity": "critical",
+            "day": 1,
+            "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+            "repair_strategy": "ADD_UNUSED_CANDIDATE",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "unresolved_blocking",
+            "fingerprint": "37f70034a3125abfb9c8"
+          },
+          {
+            "issue_type": "constraint_failure",
+            "severity": "critical",
+            "day": null,
+            "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+            "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "unresolved_blocking",
+            "fingerprint": "fa073b0745c933923a3a"
+          },
+          {
+            "issue_type": "missing_must_visit",
+            "severity": "critical",
+            "day": null,
+            "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+            "repair_strategy": "ADD_MUST_VISIT",
+            "affected_visit_keys": [],
+            "source": "deterministic",
+            "resolution_status": "unresolved_blocking",
+            "fingerprint": "cc12a381ffbde3e16422"
+          }
+        ],
+        "unresolved_non_blocking_issues": [],
+        "degraded_reason": "Quality gate unresolved after bounded repair: empty_day(Day 1): Day 1 has no scheduled activities during a usable destination-day window; constraint_failure: 需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩; missing_must_visit: Required attraction 外滩 is absent; matching candidates=0",
+        "suggested_alternatives": [
+          "需处理后执行：Day 1 has no scheduled activities during a usable destination-day window；建议动作 ADD_UNUSED_CANDIDATE",
+          "需处理后执行：Required attraction 外滩 is absent; matching candidates=0；建议动作 ADD_MUST_VISIT",
+          "需处理后执行：需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩；建议动作 RUN_CONSTRAINT_REPAIR"
+        ],
+        "best_effort": true,
+        "repair_history": [
+          {
+            "iteration": 1,
+            "trigger_issue": {
+              "issue_type": "empty_day",
+              "severity": "critical",
+              "day": 1,
+              "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+              "repair_strategy": "ADD_UNUSED_CANDIDATE",
+              "affected_visit_keys": [],
+              "source": "deterministic",
+              "resolution_status": "open",
+              "fingerprint": "37f70034a3125abfb9c8"
+            },
+            "issue_fingerprint": "37f70034a3125abfb9c8",
+            "selected_action": "no_legal_repair_available",
+            "action_result": "No supported mutation was available",
+            "accepted": false,
+            "rejection_reason": "No repair could be produced from the existing candidate pool and deterministic planner actions",
+            "changes": [],
+            "constraint_pass_before": false,
+            "constraint_pass_after": false,
+            "quality_score_before": 2.5,
+            "quality_score_after": 2.5,
+            "issues_before": [
+              {
+                "issue_type": "empty_day",
+                "severity": "critical",
+                "day": 1,
+                "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+                "repair_strategy": "ADD_UNUSED_CANDIDATE",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "37f70034a3125abfb9c8"
+              },
+              {
+                "issue_type": "constraint_failure",
+                "severity": "critical",
+                "day": null,
+                "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+                "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "fa073b0745c933923a3a"
+              },
+              {
+                "issue_type": "missing_must_visit",
+                "severity": "critical",
+                "day": null,
+                "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+                "repair_strategy": "ADD_MUST_VISIT",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "cc12a381ffbde3e16422"
+              }
+            ],
+            "issues_after": [
+              {
+                "issue_type": "empty_day",
+                "severity": "critical",
+                "day": 1,
+                "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+                "repair_strategy": "ADD_UNUSED_CANDIDATE",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "37f70034a3125abfb9c8"
+              },
+              {
+                "issue_type": "constraint_failure",
+                "severity": "critical",
+                "day": null,
+                "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+                "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "fa073b0745c933923a3a"
+              },
+              {
+                "issue_type": "missing_must_visit",
+                "severity": "critical",
+                "day": null,
+                "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+                "repair_strategy": "ADD_MUST_VISIT",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "cc12a381ffbde3e16422"
+              }
+            ]
+          },
+          {
+            "iteration": 2,
+            "trigger_issue": {
+              "issue_type": "missing_must_visit",
+              "severity": "critical",
+              "day": null,
+              "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+              "repair_strategy": "ADD_MUST_VISIT",
+              "affected_visit_keys": [],
+              "source": "deterministic",
+              "resolution_status": "open",
+              "fingerprint": "cc12a381ffbde3e16422"
+            },
+            "issue_fingerprint": "cc12a381ffbde3e16422",
+            "selected_action": "no_legal_repair_available",
+            "action_result": "No supported mutation was available",
+            "accepted": false,
+            "rejection_reason": "No repair could be produced from the existing candidate pool and deterministic planner actions",
+            "changes": [],
+            "constraint_pass_before": false,
+            "constraint_pass_after": false,
+            "quality_score_before": 2.5,
+            "quality_score_after": 2.5,
+            "issues_before": [
+              {
+                "issue_type": "empty_day",
+                "severity": "critical",
+                "day": 1,
+                "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+                "repair_strategy": "ADD_UNUSED_CANDIDATE",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "37f70034a3125abfb9c8"
+              },
+              {
+                "issue_type": "constraint_failure",
+                "severity": "critical",
+                "day": null,
+                "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+                "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "fa073b0745c933923a3a"
+              },
+              {
+                "issue_type": "missing_must_visit",
+                "severity": "critical",
+                "day": null,
+                "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+                "repair_strategy": "ADD_MUST_VISIT",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "cc12a381ffbde3e16422"
+              }
+            ],
+            "issues_after": [
+              {
+                "issue_type": "empty_day",
+                "severity": "critical",
+                "day": 1,
+                "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+                "repair_strategy": "ADD_UNUSED_CANDIDATE",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "37f70034a3125abfb9c8"
+              },
+              {
+                "issue_type": "constraint_failure",
+                "severity": "critical",
+                "day": null,
+                "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+                "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "fa073b0745c933923a3a"
+              },
+              {
+                "issue_type": "missing_must_visit",
+                "severity": "critical",
+                "day": null,
+                "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+                "repair_strategy": "ADD_MUST_VISIT",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "cc12a381ffbde3e16422"
+              }
+            ]
+          },
+          {
+            "iteration": 3,
+            "trigger_issue": {
+              "issue_type": "constraint_failure",
+              "severity": "critical",
+              "day": null,
+              "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+              "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+              "affected_visit_keys": [],
+              "source": "deterministic",
+              "resolution_status": "open",
+              "fingerprint": "fa073b0745c933923a3a"
+            },
+            "issue_fingerprint": "fa073b0745c933923a3a",
+            "selected_action": "no_legal_repair_available",
+            "action_result": "No supported mutation was available",
+            "accepted": false,
+            "rejection_reason": "No repair could be produced from the existing candidate pool and deterministic planner actions",
+            "changes": [],
+            "constraint_pass_before": false,
+            "constraint_pass_after": false,
+            "quality_score_before": 2.5,
+            "quality_score_after": 2.5,
+            "issues_before": [
+              {
+                "issue_type": "empty_day",
+                "severity": "critical",
+                "day": 1,
+                "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+                "repair_strategy": "ADD_UNUSED_CANDIDATE",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "37f70034a3125abfb9c8"
+              },
+              {
+                "issue_type": "constraint_failure",
+                "severity": "critical",
+                "day": null,
+                "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+                "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "fa073b0745c933923a3a"
+              },
+              {
+                "issue_type": "missing_must_visit",
+                "severity": "critical",
+                "day": null,
+                "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+                "repair_strategy": "ADD_MUST_VISIT",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "cc12a381ffbde3e16422"
+              }
+            ],
+            "issues_after": [
+              {
+                "issue_type": "empty_day",
+                "severity": "critical",
+                "day": 1,
+                "evidence": "Day 1 has no scheduled activities during a usable destination-day window",
+                "repair_strategy": "ADD_UNUSED_CANDIDATE",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "37f70034a3125abfb9c8"
+              },
+              {
+                "issue_type": "constraint_failure",
+                "severity": "critical",
+                "day": null,
+                "evidence": "需要在重规划中优先加入; 缺少必去景点：外滩; 缺少必去景点：外滩",
+                "repair_strategy": "RUN_CONSTRAINT_REPAIR",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "fa073b0745c933923a3a"
+              },
+              {
+                "issue_type": "missing_must_visit",
+                "severity": "critical",
+                "day": null,
+                "evidence": "Required attraction 外滩 is absent; matching candidates=0",
+                "repair_strategy": "ADD_MUST_VISIT",
+                "affected_visit_keys": [],
+                "source": "deterministic",
+                "resolution_status": "open",
+                "fingerprint": "cc12a381ffbde3e16422"
+              }
+            ]
+          }
+        ],
+        "observability_trace": null
+      },
+      "session_id": null,
+      "plan_version": null,
+      "workflow": null
+    }
+  }
+]

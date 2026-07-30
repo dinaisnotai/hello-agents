@@ -331,6 +331,7 @@ class AmapService:
             pois.append(
                 POIInfo(
                     id=str(item.get("id") or item.get("poi_id") or ""),
+                    parent_poi_id=self._parent_poi_id(item),
                     name=str(item.get("name") or f"{city}{keywords}{index + 1}"),
                     type=str(item.get("type") or item.get("category") or keywords or "景点"),
                     address=address or city,
@@ -348,6 +349,15 @@ class AmapService:
                 )
             )
         return pois
+
+    @staticmethod
+    def _parent_poi_id(item: Dict[str, Any]) -> str:
+        value = item.get("parent_poi_id") or item.get("parent") or ""
+        if isinstance(value, dict):
+            value = value.get("id") or value.get("poi_id") or ""
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        return str(value) if value not in (None, False, "[]") else ""
 
     @staticmethod
     def _opening_hours_fields(item: Dict[str, Any], biz_ext: Dict[str, Any]) -> Dict[str, Any]:
@@ -561,6 +571,7 @@ class AmapService:
         names_by_city = {
             "北京": [
                 ("故宫博物院", "博物馆;文物古迹"),
+                ("文华殿", "宫殿;故宫内部景点"),
                 ("天坛公园", "公园;文物古迹"),
                 ("颐和园", "公园;文物古迹"),
                 ("国家博物馆", "博物馆"),
@@ -574,6 +585,15 @@ class AmapService:
                 ("798艺术区", "文化艺术;城市观光"),
                 ("中国电影博物馆", "博物馆;专业展馆"),
                 ("中国海关博物馆", "博物馆;专业展馆"),
+                ("国子监", "文物古迹;历史文化"),
+                ("北京湖广会馆", "文物古迹;专题历史"),
+                ("正阳门箭楼", "文物古迹;历史建筑"),
+                ("首都博物馆", "博物馆;历史文化"),
+                ("史家胡同博物馆", "博物馆;专题历史"),
+                ("北京动物园", "动物园;亲子"),
+                ("中国科学技术馆", "科技馆;亲子;互动体验"),
+                ("亮马河国际风情水岸公园", "公园"),
+                ("念坛公园", "公园"),
             ],
             "上海": [
                 ("外滩", "历史建筑"),
@@ -611,6 +631,8 @@ class AmapService:
         )
         pois = []
         known_coordinates = {
+            "故宫博物院": Location(longitude=116.3970, latitude=39.9180),
+            "文华殿": Location(longitude=116.4018, latitude=39.9163),
             "八达岭长城": Location(longitude=116.0168, latitude=40.3563),
             "颐和园": Location(longitude=116.2732, latitude=39.9999),
             "圆明园": Location(longitude=116.3036, latitude=40.0081),
@@ -622,6 +644,11 @@ class AmapService:
             pois.append(
                 POIInfo(
                     id=f"fallback-{city}-{normalize_place_name(name)}",
+                    parent_poi_id=(
+                        f"fallback-{city}-{normalize_place_name('故宫博物院')}"
+                        if name == "文华殿"
+                        else ""
+                    ),
                     name=name,
                     type=category,
                     address=f"{city}市中心区域",

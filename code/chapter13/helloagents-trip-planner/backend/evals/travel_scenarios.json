@@ -17,7 +17,9 @@
     "constraints": {},
     "quality_expectations": {
       "low_transport_time": true,
-      "category_diversity": true
+      "category_diversity": true,
+      "core_landmark_coverage": true,
+      "min_core_landmarks": 2
     }
   },
   {
@@ -155,6 +157,193 @@
     "quality_expectations": {
       "relaxed_pace": true,
       "low_transport_time": true
+    }
+  },
+  {
+    "name": "palace_parent_child_dedup",
+    "description": "The Forbidden City and its child POI Wenhua Hall must count as one canonical visit.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": ["historic", "culture"],
+      "must_visit": ["故宫"],
+      "first_visit": true,
+      "pace": "balanced"
+    },
+    "constraints": {
+      "must_visit": ["故宫"]
+    },
+    "quality_expectations": {
+      "no_duplicate_visits": true,
+      "exclusive_poi_groups": [["故宫", "文华殿"]],
+      "core_landmark_coverage": true
+    }
+  },
+  {
+    "name": "multi_day_palace_no_repeat",
+    "description": "A multi-day itinerary must not schedule the Forbidden City more than once.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-13",
+      "travel_days": 4,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": ["historic"],
+      "must_visit": ["故宫"],
+      "first_visit": true,
+      "pace": "balanced"
+    },
+    "constraints": {
+      "must_visit": ["故宫"]
+    },
+    "quality_expectations": {
+      "no_duplicate_visits": true,
+      "exclusive_poi_groups": [["故宫", "文华殿"]],
+      "core_landmark_coverage": true,
+      "min_core_landmarks": 2
+    }
+  },
+  {
+    "name": "portfolio_first_visit_family_beijing",
+    "description": "First-visit family personalization must retain representative Beijing and child-friendly layers without park stacking.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-11-01",
+      "end_date": "2026-11-03",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "family hotel",
+      "preferences": ["family", "interactive_activity"],
+      "travelers": ["two adults", "child"],
+      "first_visit": true,
+      "pace": "balanced"
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "family_friendly": true,
+      "core_landmark_coverage": true,
+      "min_core_landmarks": 2,
+      "min_major_attractions": 1,
+      "max_niche_ratio": 0.34,
+      "min_portfolio_balance_score": 60,
+      "require_selection_explanations": true
+    }
+  },
+  {
+    "name": "portfolio_first_visit_history_beijing",
+    "description": "History preference must form core, major, and limited niche layers.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-11-01",
+      "end_date": "2026-11-03",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": ["historic", "culture"],
+      "first_visit": true,
+      "pace": "balanced"
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "preference_alignment": true,
+      "core_landmark_coverage": true,
+      "min_core_landmarks": 2,
+      "min_major_attractions": 1,
+      "max_niche_ratio": 0.34,
+      "max_repeated_subcategory_ratio": 0.7,
+      "require_selection_explanations": true
+    }
+  },
+  {
+    "name": "portfolio_explicit_deep_history_beijing",
+    "description": "A repeat visitor explicitly requesting niche in-depth history may use a higher niche ratio without a core quota.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-11-01",
+      "end_date": "2026-11-03",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": ["historic"],
+      "first_visit": false,
+      "free_text_input": "Repeat visitor; avoid popular attractions; niche in-depth history and specialist research.",
+      "pace": "balanced"
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "preference_alignment": true,
+      "min_niche_ratio": 0.15,
+      "require_selection_explanations": true
+    }
+  },
+  {
+    "name": "portfolio_no_preference_beijing",
+    "description": "A neutral Beijing itinerary retains representative landmark coverage.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-11-01",
+      "end_date": "2026-11-03",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": [],
+      "pace": "balanced"
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "core_landmark_coverage": true,
+      "min_core_landmarks": 2,
+      "max_niche_ratio": 0.34,
+      "min_portfolio_balance_score": 60
+    }
+  },
+  {
+    "name": "portfolio_sparse_strong_preference",
+    "description": "A strong narrow preference must not fill capacity with low-value same-category venues.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-11-01",
+      "end_date": "2026-11-03",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": ["specialist museum"],
+      "first_visit": true,
+      "pace": "balanced"
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "core_landmark_coverage": true,
+      "min_core_landmarks": 2,
+      "max_niche_ratio": 0.25,
+      "max_repeated_subcategory_ratio": 0.7
+    }
+  },
+  {
+    "name": "portfolio_preference_core_conflict_explained",
+    "description": "When preference candidates compete with core landmarks, every selected and rejected candidate has an auditable reason.",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-11-01",
+      "end_date": "2026-11-03",
+      "travel_days": 3,
+      "transportation": "public transit",
+      "accommodation": "comfortable hotel",
+      "preferences": ["family", "park"],
+      "travelers": ["child"],
+      "first_visit": true,
+      "pace": "balanced"
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "core_landmark_coverage": true,
+      "min_core_landmarks": 2,
+      "require_selection_explanations": true
     }
   }
 ]

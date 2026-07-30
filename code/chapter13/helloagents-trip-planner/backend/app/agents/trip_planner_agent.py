@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Optional, Set
+from typing import Callable, List, Optional, Sequence, Set
 import logging
 from ..models.schemas import (
     Attraction,
@@ -16,6 +16,7 @@ from ..models.schemas import (
     DayPlan,
     EvidenceSource,
     Hotel,
+    Location,
     Meal,
     POIInfo,
     PlanningTraceItem,
@@ -27,6 +28,13 @@ from ..models.schemas import (
     TripRequest,
     WeatherInfo,
 )
+from ..models.quality import (
+    ExperienceEvaluation,
+    ExperienceIssue,
+    PlanChange,
+    RepairIteration,
+    RepairStrategy,
+)
 from ..constraints.extractor import ConstraintExtractor
 from ..constraints.schema import (
     ConstraintSet,
@@ -36,18 +44,25 @@ from ..constraints.schema import (
 from ..constraints.validators import ConstraintValidationEngine
 from ..services.amap_service import AmapService, get_amap_service
 from ..services.attraction_scorer import AttractionScorer
+from ..services.accommodation_selector import AccommodationSelector
+from ..services.candidate_acceptance_policy import CandidateAcceptancePolicy
+from ..services.user_warning_service import curate_user_warnings
 from ..services.place_name_service import normalize_place_name, place_names_match
 from ..services.planning_observability import (
     build_planning_trace,
     emit_planning_trace,
     refresh_planning_trace,
 )
+from ..services.poi_identity_resolver import POIIdentityResolver
+from ..services.itinerary_quality import ItineraryCompletenessGate
+from ..services.repair_controller import RepairController
 from ..services.poi_category_service import POI_CATEGORY_LABELS, classify_poi
 from ..services.poi_metadata_service import (
     build_preference_profile,
     enrich_attraction,
     enrich_poi,
     get_city_classic_names,
+    get_city_core_names,
     preference_matches_categories,
 )
 from ..services.rag_service import TravelGuideRAG, get_travel_guide_rag
@@ -103,6 +118,7 @@ def daily_time_budget_minutes(request: TripRequest) -> int:
 class POICollector:
     def __init__(self, amap_service: AmapService):
         self.amap_service = amap_service
+        self.identity_resolver = POIIdentityResolver()
 
     def collect_attractions(self, request: TripRequest) -> List[Attraction]:
         recalled = self._recall_candidates(request)
@@ -134,17 +150,10 @@ class POICollector:
                     )
                 )
 
-        if request.city == "北京":
-            # First-time visitors need explicit classic recall; relying on a
-            # generic "museum" query over-represents niche venues.
-            for classic_name in (
-                "故宫",
-                "天坛",
-                "八达岭长城",
-                "颐和园",
-                "国家博物馆",
-                "景山",
-            ):
+        if build_preference_profile(request).prefer_classic:
+            # First-time visitors need explicit core recall; relying on generic
+            # interest queries can over-represent nearby niche venues.
+            for classic_name in get_city_core_names(request.city):
                 for poi in self._safe_search(classic_name, request.city):
                     poi = enrich_poi(poi, request.city)
                     if place_names_match(classic_name, poi.name):
@@ -346,6 +355,8 @@ class POICollector:
             crowd_level=poi.crowd_level,
             rating=poi.rating,
             poi_id=poi.id,
+            parent_poi_id=poi.parent_poi_id,
+            visit_key=poi.visit_key,
             ticket_price=poi.ticket_price,
             score=candidate.score,
             recall_sources=sorted(candidate.recall_sources),
@@ -357,7 +368,7 @@ class POICollector:
             hours_source=poi.hours_source,
         )
 
-    def collect_hotel(self, request: TripRequest) -> Hotel:
+    def collect_hotels(self, request: TripRequest) -> List[Hotel]:
         keyword = f"{request.hotel_area or request.city} {request.accommodation} 酒店"
         accommodation = request.accommodation.lower()
         if "经济" in accommodation or any(
@@ -377,23 +388,48 @@ class POICollector:
                 max(150, int(daily_budget * 0.5)),
             )
         pois = self._safe_search(keyword, request.city)
-        if not pois:
-            return Hotel(
-                name=f"{request.hotel_area or request.city}待确认酒店",
+        # A keyword search can return nearby attractions, malls, or ordinary
+        # restaurants. Those are not accommodation evidence and must never
+        # become a numbered "recommended hotel" or a route anchor.
+        lodging_pois = [poi for poi in pois if self._is_lodging_poi(poi)]
+        if not lodging_pois:
+            return [
+                Hotel(
+                    name=f"{request.hotel_area or request.city}待确认酒店",
+                    type=request.accommodation,
+                    estimated_cost=nightly_cost,
+                    distance="未获取可验证的住宿 POI；请在出发前确认酒店",
+                )
+            ]
+        return [
+            Hotel(
+                name=poi.name,
+                address=poi.address,
+                location=poi.location,
+                price_range=f"{nightly_cost}-{nightly_cost + 200}元/晚",
+                rating=str(poi.rating or 4.5),
+                distance="待行程联合评估",
                 type=request.accommodation,
                 estimated_cost=nightly_cost,
             )
-        poi = pois[0]
-        return Hotel(
-            name=poi.name if "酒店" in poi.name else f"{request.hotel_area or request.city}推荐酒店",
-            address=poi.address,
-            location=poi.location,
-            price_range=f"{nightly_cost}-{nightly_cost + 200}元/晚",
-            rating=str(poi.rating or 4.5),
-            distance="靠近核心游览区域",
-            type=request.accommodation,
-            estimated_cost=nightly_cost,
+            for poi in lodging_pois[:5]
+        ]
+
+    @staticmethod
+    def _is_lodging_poi(poi: POIInfo) -> bool:
+        """Require provider evidence that a POI is an accommodation venue."""
+
+        text = f"{poi.name} {poi.type}".lower()
+        lodging_terms = (
+            "住宿", "酒店", "宾馆", "旅馆", "民宿", "客栈", "度假村",
+            "hotel", "hostel", "motel", "resort", "inn", "accommodation",
         )
+        return any(term in text for term in lodging_terms)
+
+    def collect_hotel(self, request: TripRequest) -> Hotel:
+        """Backward-compatible single-hotel facade."""
+
+        return self.collect_hotels(request)[0]
 
     def _score_poi(self, name: str, category: str, request: TripRequest) -> float:
         score = 50.0
@@ -411,9 +447,7 @@ class POICollector:
             return []
 
     def _same_poi(self, left: POIInfo, right: POIInfo) -> bool:
-        if left.id and right.id and left.id == right.id:
-            return True
-        return place_names_match(left.name, right.name)
+        return self.identity_resolver.same_visit_entity(left, right)
 
     def _poi_quality(self, poi: POIInfo) -> tuple:
         return (
@@ -556,7 +590,16 @@ class ConstraintChecker:
             )
 
         all_names = [attr.name for day in plan.days for attr in day.attractions]
-        empty_days = [day.day_index + 1 for day in plan.days if not day.attractions]
+        empty_days = [
+            day.day_index + 1
+            for day in plan.days
+            if not day.attractions
+            and not self._reasonable_arrival_or_departure_empty_day(
+                day.day_index,
+                len(plan.days),
+                request,
+            )
+        ]
         if len(plan.days) > 1:
             days_covered = not empty_days
             items.append(
@@ -836,6 +879,26 @@ class ConstraintChecker:
             items=items,
         )
 
+    @staticmethod
+    def _reasonable_arrival_or_departure_empty_day(
+        day_index: int,
+        day_count: int,
+        request: TripRequest,
+    ) -> bool:
+        start = _clock_minutes(request.daily_start_time, 9 * 60)
+        end = _clock_minutes(request.daily_end_time, 20 * 60)
+        if day_index == 0 and request.arrival_time:
+            start = max(start, _clock_minutes(request.arrival_time, start))
+        if day_index == day_count - 1 and request.departure_time:
+            end = min(end, _clock_minutes(request.departure_time, end))
+        has_actual_boundary = (
+            day_index == 0
+            and bool(request.arrival_time)
+            or day_index == day_count - 1
+            and bool(request.departure_time)
+        )
+        return has_actual_boundary and max(0, end - start) < 180
+
 
 class PlannerReviewer:
     def review(self, plan: TripPlan, request: TripRequest) -> TripPlan:
@@ -1028,11 +1091,48 @@ class MultiAgentTripPlanner:
     """Coordinates deterministic planner roles and optional local RAG evidence."""
 
     max_planning_iterations = 3
+    max_quality_repair_iterations = 3
+
+    def _identity(self) -> POIIdentityResolver:
+        resolver = getattr(self, "identity_resolver", None)
+        if resolver is None:
+            resolver = POIIdentityResolver()
+            self.identity_resolver = resolver
+        return resolver
+
+    def _candidate_policy(self) -> CandidateAcceptancePolicy:
+        policy = getattr(self, "candidate_acceptance_policy", None)
+        if policy is None:
+            policy = CandidateAcceptancePolicy()
+            self.candidate_acceptance_policy = policy
+        return policy
+
+    @staticmethod
+    def _daily_time_budget(request: TripRequest) -> int:
+        return daily_time_budget_minutes(request)
+
+    @staticmethod
+    def _city_planning_reference(city: str) -> Location:
+        """Neutral geographic reference, never presented as a hotel."""
+
+        centers = {
+            "北京": (116.397128, 39.916527),
+            "上海": (121.473701, 31.230416),
+            "杭州": (120.155070, 30.274084),
+            "成都": (104.066541, 30.572269),
+            "广州": (113.264385, 23.129112),
+            "深圳": (114.057868, 22.543099),
+        }
+        longitude, latitude = centers.get(city, (116.397128, 39.916527))
+        return Location(longitude=longitude, latitude=latitude)
 
     def __init__(self):
         self.amap_service = get_amap_service()
         self.rag = get_travel_guide_rag()
         self.poi_collector = POICollector(self.amap_service)
+        self.identity_resolver = POIIdentityResolver()
+        self.accommodation_selector = AccommodationSelector()
+        self.candidate_acceptance_policy = CandidateAcceptancePolicy()
         self.attraction_scorer = AttractionScorer()
         self.spatial_planner = SpatialItineraryPlanner()
         self.route_evaluator = RouteEvaluator(self.amap_service)
@@ -1041,6 +1141,10 @@ class MultiAgentTripPlanner:
         self.constraint_extractor = ConstraintExtractor()
         self.constraint_validator = ConstraintValidationEngine()
         self.reviewer = PlannerReviewer()
+        self.completeness_gate = ItineraryCompletenessGate(
+            self.identity_resolver
+        )
+        self.repair_controller = RepairController(self)
 
     def plan_trip(
         self,
@@ -1049,7 +1153,10 @@ class MultiAgentTripPlanner:
         emit_observability: bool = True,
     ) -> TripPlan:
         attractions = self.poi_collector.collect_attractions(request)
-        hotel = self.poi_collector.collect_hotel(request)
+        hotel_candidates = self.poi_collector.collect_hotels(request)
+        hotel = self.accommodation_selector.select(
+            request, hotel_candidates, attractions
+        )
         weather = self._weather_for_dates(request)
         evidence = self.rag.search(request.city, self.build_rag_query(request), top_k=5)
 
@@ -1059,6 +1166,7 @@ class MultiAgentTripPlanner:
             hotel=hotel,
             weather=weather,
             evidence=evidence,
+            hotel_candidates=hotel_candidates,
         )
         refresh_planning_trace(plan, run_type="deterministic")
         if emit_observability:
@@ -1073,6 +1181,7 @@ class MultiAgentTripPlanner:
         weather: List[WeatherInfo],
         evidence: List[EvidenceSource],
         constraint_set: ConstraintSet | None = None,
+        hotel_candidates: Sequence[Hotel] = (),
     ) -> TripPlan:
         """Build a plan from specialist outputs without searching again."""
 
@@ -1092,10 +1201,22 @@ class MultiAgentTripPlanner:
             )
             for attraction in attractions
         ]
+        attractions = self._identity().deduplicate(
+            attractions,
+            must_visit=effective_request.must_visit,
+        )
+        # A missing verified hotel must not become a fake hotel route anchor.
+        # Use an internal city reference only for candidate ranking and
+        # clustering so a remote landmark does not win simply because no
+        # origin was known. The DayPlan still carries the unlocated
+        # "待确认酒店" and route metrics do not claim hotel legs.
+        planning_reference = hotel.location or self._city_planning_reference(
+            effective_request.city
+        )
         attractions = self.attraction_scorer.score_candidates(
             attractions,
             effective_request,
-            hotel.location if hotel else None,
+            planning_reference,
             daily_time_budget_minutes(effective_request),
         )
         scored_candidates = list(attractions)
@@ -1114,7 +1235,11 @@ class MultiAgentTripPlanner:
         )
         self._apply_conservative_opening_hours(attractions)
         days = self._assign_days(
-            effective_request, attractions, hotel, constraint_set
+            effective_request,
+            attractions,
+            hotel,
+            constraint_set,
+            planning_reference=planning_reference,
         )
         plan = TripPlan(
             city=effective_request.city,
@@ -1165,6 +1290,13 @@ class MultiAgentTripPlanner:
                     score_after=plan.review_scores.route_score / 100,
                 )
             )
+        plan = self.run_quality_loop(
+            plan,
+            effective_request,
+            attractions,
+            hotel_candidates=hotel_candidates or [hotel],
+        )
+        curate_user_warnings(plan)
         plan.observability_trace = build_planning_trace(
             effective_request,
             plan,
@@ -1172,7 +1304,739 @@ class MultiAgentTripPlanner:
             eligible_candidates=attractions,
             run_type="deterministic_build",
         )
+        self._log_finalized_itinerary(plan)
         return plan
+
+    @staticmethod
+    def _log_finalized_itinerary(plan: TripPlan) -> None:
+        logger.info(
+            "========== finalize 后日程选点 ==========%s",
+            [
+                {
+                    "day": day.day_index + 1,
+                    "pois": [
+                        {
+                            "name": item.name,
+                            "visit_key": item.visit_key,
+                            "role": item.selection_role,
+                            "score": round(item.score, 2),
+                        }
+                        for item in day.attractions
+                    ],
+                }
+                for day in plan.days
+            ],
+        )
+
+    def run_quality_loop(
+        self,
+        plan: TripPlan,
+        request: TripRequest,
+        available_attractions: Sequence[Attraction],
+        *,
+        hotel_candidates: Sequence[Hotel] = (),
+        external_evaluator: Callable[
+            [TripPlan], ExperienceEvaluation | None
+        ]
+        | None = None,
+        initial_external_evaluation: ExperienceEvaluation | None = None,
+    ) -> TripPlan:
+        """Run a bounded gate → directed repair → full revalidation loop."""
+
+        gate = getattr(self, "completeness_gate", None)
+        if gate is None:
+            gate = ItineraryCompletenessGate(self._identity())
+            self.completeness_gate = gate
+        controller = getattr(self, "repair_controller", None)
+        if controller is None:
+            controller = RepairController(self)
+            self.repair_controller = controller
+
+        current = deepcopy(plan)
+        self._recalculate(current, request)
+        for day in current.days:
+            if not day.primary_plan:
+                day.primary_plan = deepcopy(day.attractions)
+        external = initial_external_evaluation
+        if external is None and external_evaluator is not None:
+            external = external_evaluator(current)
+        evaluation = gate.merge(
+            gate.evaluate(request, current, available_attractions),
+            external,
+        )
+
+        attempted = {
+            item.issue_fingerprint or item.trigger_issue.fingerprint
+            for item in current.repair_history
+        }
+        for iteration in range(1, self.max_quality_repair_iterations + 1):
+            trigger = self._next_quality_issue(evaluation, attempted)
+            if trigger is None:
+                break
+            attempted.add(trigger.fingerprint)
+            before = deepcopy(current)
+            proposal = controller.propose(
+                current,
+                request,
+                available_attractions,
+                hotel_candidates,
+                trigger,
+            )
+            if proposal is None:
+                scope = RepairController.mutation_scope(
+                    trigger.repair_strategy,
+                    trigger.day,
+                )
+                current.repair_history.append(
+                    RepairIteration(
+                        iteration=iteration,
+                        trigger_issue=trigger,
+                        issue_fingerprint=trigger.fingerprint,
+                        selected_action="no_legal_repair_available",
+                        action_result="No supported mutation was available",
+                        accepted=False,
+                        rejection_reason=(
+                            "No repair could be produced from the existing "
+                            "candidate pool and deterministic planner actions"
+                        ),
+                        changes=[],
+                        constraint_pass_before=current.constraint_report.passed,
+                        constraint_pass_after=current.constraint_report.passed,
+                        quality_score_before=evaluation.overall_score,
+                        quality_score_after=evaluation.overall_score,
+                        issues_before=evaluation.issues,
+                        issues_after=evaluation.issues,
+                        mutation_scope=list(scope),
+                        actual_modified_fields=[],
+                        itinerary_before=self._itinerary_snapshot(current),
+                        itinerary_after=self._itinerary_snapshot(current),
+                        constraint_delta={"added": [], "removed": []},
+                        issue_delta={"added": [], "removed": [], "remaining": [
+                            item.fingerprint for item in evaluation.issues
+                        ]},
+                        rollback_reason="no_legal_repair_available",
+                    )
+                )
+                continue
+
+            candidate = proposal.plan
+            proposal_scope = (
+                proposal.mutation_scope
+                or RepairController.mutation_scope(
+                    trigger.repair_strategy,
+                    trigger.day,
+                )
+            )
+            proposal_fields = self._repair_modified_fields(before, candidate)
+            scope_violations = self._scope_violations(
+                proposal_fields,
+                proposal_scope,
+            )
+            if scope_violations:
+                reason = (
+                    "Mutation scope violation for "
+                    f"{trigger.repair_strategy.value}: "
+                    + ", ".join(scope_violations)
+                )
+                current.repair_history.append(
+                    RepairIteration(
+                        iteration=iteration,
+                        trigger_issue=trigger,
+                        issue_fingerprint=trigger.fingerprint,
+                        selected_action=proposal.action,
+                        action_result=(
+                            "rolled_back_before_recalculation"
+                        ),
+                        accepted=False,
+                        rejection_reason=reason,
+                        rollback_reason=reason,
+                        changes=self._quality_plan_changes(before, candidate),
+                        constraint_pass_before=self._hard_constraints_pass(before),
+                        constraint_pass_after=self._hard_constraints_pass(before),
+                        quality_score_before=evaluation.overall_score,
+                        quality_score_after=evaluation.overall_score,
+                        issues_before=evaluation.issues,
+                        issues_after=evaluation.issues,
+                        mutation_scope=list(proposal_scope),
+                        actual_modified_fields=proposal_fields,
+                        itinerary_before=self._itinerary_snapshot(before),
+                        itinerary_after=self._itinerary_snapshot(candidate),
+                        constraint_delta={"added": [], "removed": []},
+                        issue_delta={"added": [], "removed": [], "remaining": [
+                            item.fingerprint for item in evaluation.issues
+                        ]},
+                    )
+                )
+                break
+            proposal_evaluation = gate.evaluate(
+                request,
+                candidate,
+                available_attractions,
+            )
+            duplicate_introduced = any(
+                item.issue_type == "duplicate_visit"
+                for item in proposal_evaluation.issues
+            )
+            self._recalculate(candidate, request)
+            candidate = self.reviewer.review(candidate, request)
+            candidate_external = (
+                external_evaluator(candidate)
+                if external_evaluator is not None
+                else None
+            )
+            after_evaluation = gate.merge(
+                gate.evaluate(
+                    request,
+                    candidate,
+                    available_attractions,
+                ),
+                candidate_external,
+            )
+            changes = self._quality_plan_changes(before, candidate)
+            duplicate_after = any(
+                item.issue_type == "duplicate_visit" and item.is_blocking
+                for item in after_evaluation.issues
+            )
+            hard_pass_after = self._hard_constraints_pass(candidate)
+            improved = self._quality_rank(after_evaluation) > self._quality_rank(
+                evaluation
+            )
+            before_blocking = {
+                item.fingerprint
+                for item in evaluation.issues
+                if item.is_blocking
+            }
+            after_blocking = {
+                item.fingerprint
+                for item in after_evaluation.issues
+                if item.is_blocking
+            }
+            new_blocking = after_blocking - before_blocking
+            before_hard = self._hard_violation_keys(before)
+            after_hard = self._hard_violation_keys(candidate)
+            new_hard = after_hard - before_hard
+            before_high = {
+                item.fingerprint
+                for item in evaluation.issues
+                if item.severity in {"high", "critical"}
+            }
+            after_high = {
+                item.fingerprint
+                for item in after_evaluation.issues
+                if item.severity in {"high", "critical"}
+            }
+            new_high = after_high - before_high
+            significant_transport_regression = [
+                day_after.day_index + 1
+                for day_before, day_after in zip(before.days, candidate.days)
+                if day_before.attractions
+                and (
+                    day_after.daily_travel_minutes
+                    - day_before.daily_travel_minutes
+                    > max(60, day_before.daily_travel_minutes * 0.25)
+                )
+            ]
+            soft_metric_regressions = []
+            if not trigger.is_blocking:
+                strict_non_mutating = (
+                    trigger.repair_strategy
+                    == RepairStrategy.ADD_WEATHER_BACKUP
+                )
+                for day_before, day_after in zip(before.days, candidate.days):
+                    if (
+                        day_after.daily_walking_distance_km
+                        > day_before.daily_walking_distance_km
+                        + (0.01 if strict_non_mutating else 0.5)
+                    ):
+                        soft_metric_regressions.append(
+                            f"Day {day_after.day_index + 1} walking increased"
+                        )
+                    if (
+                        day_after.daily_travel_minutes
+                        > day_before.daily_travel_minutes
+                        + (0 if strict_non_mutating else 15)
+                    ):
+                        soft_metric_regressions.append(
+                            f"Day {day_after.day_index + 1} transport increased"
+                        )
+            utilization_regression = False
+            if (
+                trigger.repair_strategy
+                not in {
+                    RepairStrategy.RECLUSTER_ROUTE,
+                    RepairStrategy.RESELECT_HOTEL,
+                }
+                and trigger.day
+                and trigger.day <= len(candidate.days)
+            ):
+                utilization_regression = (
+                    candidate.days[trigger.day - 1].day_utilization_score
+                    + 0.1
+                    < before.days[trigger.day - 1].day_utilization_score
+                )
+            target_improved = self._target_issue_improved(
+                trigger,
+                after_evaluation,
+            )
+            accepted = (
+                hard_pass_after
+                and not duplicate_introduced
+                and not duplicate_after
+                and not new_blocking
+                and not new_hard
+                and not new_high
+                and not significant_transport_regression
+                and not utilization_regression
+                and not soft_metric_regressions
+                and target_improved
+                and improved
+            )
+            rejection_reason = ""
+            if not hard_pass_after:
+                rejection_reason = (
+                    "Repair rejected because full hard-constraint validation failed"
+                )
+            elif duplicate_introduced or duplicate_after:
+                rejection_reason = (
+                    "Repair rejected because it attempted to violate the "
+                    "duplicate invariant"
+                )
+            elif new_blocking:
+                rejection_reason = (
+                    "Repair rejected because it introduced new blocking "
+                    "issues: "
+                    + ", ".join(
+                        fingerprint
+                        for fingerprint in sorted(new_blocking)
+                    )
+                )
+            elif new_hard:
+                rejection_reason = (
+                    "Repair introduced hard constraint violations: "
+                    + ", ".join(sorted(new_hard))
+                )
+            elif new_high:
+                rejection_reason = (
+                    "Repair introduced new high/critical issues: "
+                    + ", ".join(sorted(new_high))
+                )
+            elif significant_transport_regression:
+                rejection_reason = (
+                    "Repair significantly increased transport on Day "
+                    + ", Day ".join(
+                        str(day) for day in significant_transport_regression
+                    )
+                )
+            elif utilization_regression:
+                rejection_reason = (
+                    f"Repair reduced target Day {trigger.day} utilization"
+                )
+            elif soft_metric_regressions:
+                rejection_reason = (
+                    "Soft-issue repair degraded primary metrics: "
+                    + "; ".join(soft_metric_regressions)
+                )
+            elif not target_improved:
+                rejection_reason = (
+                    "Repair did not improve its target issue"
+                )
+            elif not improved:
+                rejection_reason = (
+                    "Repair did not improve overall quality"
+                )
+
+            record = RepairIteration(
+                iteration=iteration,
+                trigger_issue=trigger,
+                issue_fingerprint=trigger.fingerprint,
+                selected_action=proposal.action,
+                action_result=(
+                    "accepted; plan revalidated"
+                    if accepted
+                    else "rejected transactionally; previous best plan retained"
+                ),
+                accepted=accepted,
+                rejection_reason=rejection_reason,
+                changes=changes,
+                constraint_pass_before=before.constraint_report.passed,
+                constraint_pass_after=hard_pass_after,
+                quality_score_before=evaluation.overall_score,
+                quality_score_after=after_evaluation.overall_score,
+                issues_before=evaluation.issues,
+                issues_after=after_evaluation.issues,
+                mutation_scope=list(proposal_scope),
+                actual_modified_fields=proposal_fields,
+                itinerary_before=self._itinerary_snapshot(before),
+                itinerary_after=self._itinerary_snapshot(candidate),
+                constraint_delta={
+                    "added": sorted(after_hard - before_hard),
+                    "removed": sorted(before_hard - after_hard),
+                },
+                issue_delta=self._issue_delta(
+                    evaluation,
+                    after_evaluation,
+                ),
+                rollback_reason=rejection_reason if not accepted else "",
+            )
+            if accepted:
+                for day in candidate.days:
+                    if f"days[{day.day_index}].attractions" in proposal_fields:
+                        day.primary_plan = deepcopy(day.attractions)
+                candidate.repair_history = [*current.repair_history, record]
+                candidate.planning_trace.append(
+                    PlanningTraceItem(
+                        iteration=iteration,
+                        role="QualityRepairController",
+                        action=proposal.action,
+                        reason=trigger.evidence,
+                        score_before=evaluation.overall_score / 10,
+                        score_after=after_evaluation.overall_score / 10,
+                    )
+                )
+                current = candidate
+                evaluation = after_evaluation
+            else:
+                current.repair_history.append(record)
+                # The fingerprint prevents this failed action from being retried.
+                break
+
+        final_external = (
+            external_evaluator(current)
+            if external_evaluator is not None
+            else external
+        )
+        final_evaluation = gate.merge(
+            gate.evaluate(request, current, available_attractions),
+            final_external,
+        )
+        hard_pass = self._hard_constraints_pass(current)
+        current.quality_evaluation = final_evaluation
+        unresolved = []
+        for issue in final_evaluation.issues:
+            if issue.resolution_status in {"resolved", "mitigated"}:
+                continue
+            issue.resolution_status = (
+                "unresolved_blocking"
+                if issue.is_blocking
+                else "unresolved_non_blocking"
+            )
+            unresolved.append(issue)
+        blocking = [issue for issue in unresolved if issue.is_blocking]
+        warnings = [issue for issue in unresolved if not issue.is_blocking]
+        current.quality_gate_passed = hard_pass and not blocking
+        current.unresolved_quality_issues = unresolved
+        current.unresolved_blocking_issues = blocking
+        current.unresolved_non_blocking_issues = warnings
+        current.best_effort = bool(unresolved)
+        for day in current.days:
+            if not day.primary_plan:
+                day.primary_plan = deepcopy(day.attractions)
+        current.suggested_alternatives = sorted(
+            set(
+                [
+                    *current.suggested_alternatives,
+                    *[
+                        day.weather_warning
+                        for day in current.days
+                        if day.weather_warning
+                    ],
+                    *[f"可选改进：{item.evidence}" for item in warnings],
+                    *[
+                        f"需处理后执行：{item.evidence}；建议动作 {item.repair_strategy.value}"
+                        for item in blocking
+                    ],
+                ]
+            )
+        )
+        if current.quality_gate_passed:
+            if current.failure_reason and hard_pass:
+                current.failure_reason = None
+            current.degraded_reason = None
+            current.risk_warnings = sorted(
+                set([*current.risk_warnings, *[item.evidence for item in warnings]])
+            )
+        else:
+            unresolved_text = "; ".join(
+                f"{item.issue_type}"
+                + (f"(Day {item.day})" if item.day else "")
+                + f": {item.evidence}"
+                for item in blocking
+            )
+            current.failure_reason = (
+                "Quality gate unresolved after bounded repair: "
+                + (unresolved_text or "hard constraint validation failed")
+            )
+            current.degraded_reason = current.failure_reason
+            current.risk_warnings = sorted(
+                set(
+                    [
+                        *current.risk_warnings,
+                        "质量门未通过，当前结果为 degraded，不应视为完整可执行方案。",
+                    ]
+                )
+            )
+        curate_user_warnings(current)
+        return current
+
+    @staticmethod
+    def _hard_constraints_pass(plan: TripPlan) -> bool:
+        return plan.validation_result.valid and not any(
+            not item.passed
+            and item.severity.lower() in {"blocker", "hard", "critical"}
+            for item in plan.constraint_report.items
+        )
+
+    @staticmethod
+    def _next_quality_issue(
+        evaluation: ExperienceEvaluation,
+        attempted: set[str],
+    ) -> ExperienceIssue | None:
+        severity_rank = {"critical": 3, "high": 2, "warning": 1, "info": 0}
+        priority = {
+            "duplicate_visit": 0,
+            "empty_day": 1,
+            "missing_must_visit": 2,
+            "attraction_closed": 3,
+            "safety_risk": 4,
+            "impossible_schedule": 5,
+            "budget_violation": 6,
+            "time_violation": 7,
+            "constraint_failure": 8,
+        }
+        eligible = [
+            issue
+            for issue in evaluation.issues
+            if issue.fingerprint not in attempted
+            and issue.resolution_status not in {"resolved", "mitigated"}
+            and issue.severity != "info"
+        ]
+        return min(
+            eligible,
+            key=lambda issue: (
+                not issue.is_blocking,
+                -severity_rank[issue.severity],
+                priority.get(issue.issue_type, 50),
+                issue.day or 0,
+                issue.fingerprint,
+            ),
+            default=None,
+        )
+
+    @staticmethod
+    def _quality_rank(evaluation: ExperienceEvaluation) -> tuple:
+        blocking = sum(item.is_blocking for item in evaluation.issues)
+        unresolved = sum(
+            item.resolution_status not in {"resolved", "mitigated"}
+            for item in evaluation.issues
+        )
+        return (-blocking, -unresolved, evaluation.overall_score)
+
+    @staticmethod
+    def _quality_plan_changes(
+        before: TripPlan,
+        after: TripPlan,
+    ) -> List[PlanChange]:
+        changes = []
+        for before_day, after_day in zip(before.days, after.days):
+            before_pois = [item.name for item in before_day.attractions]
+            after_pois = [item.name for item in after_day.attractions]
+            before_hotel = before_day.hotel.name if before_day.hotel else None
+            after_hotel = after_day.hotel.name if after_day.hotel else None
+            before_backup = [item.name for item in before_day.weather_backup]
+            after_backup = [item.name for item in after_day.weather_backup]
+            warning_changed = (
+                before_day.weather_warning != after_day.weather_warning
+            )
+            if (
+                before_pois != after_pois
+                or before_hotel != after_hotel
+                or before_backup != after_backup
+                or warning_changed
+            ):
+                changes.append(
+                    PlanChange(
+                        day=before_day.day_index + 1,
+                        before_pois=before_pois,
+                        after_pois=after_pois,
+                        before_hotel=before_hotel,
+                        after_hotel=after_hotel,
+                        before_weather_backup=before_backup,
+                        after_weather_backup=after_backup,
+                        details=(
+                            after_day.weather_warning
+                            if warning_changed
+                            else ""
+                        ),
+                        changed_fields=[
+                            field
+                            for field, changed in {
+                                "attractions": before_pois != after_pois,
+                                "hotel": before_hotel != after_hotel,
+                                "weather_backup": before_backup != after_backup,
+                                "weather_warning": warning_changed,
+                            }.items()
+                            if changed
+                        ],
+                    )
+                )
+        return changes
+
+    @staticmethod
+    def _repair_modified_fields(
+        before: TripPlan,
+        after: TripPlan,
+    ) -> List[str]:
+        fields: List[str] = []
+        if len(before.days) != len(after.days):
+            fields.append("days")
+        if before.overall_suggestions != after.overall_suggestions:
+            fields.append("overall_suggestions")
+        if before.weather_info != after.weather_info:
+            fields.append("weather_info")
+        for index, (old, new) in enumerate(zip(before.days, after.days)):
+            prefix = f"days[{index}]"
+            old_pois = [item.visit_key or item.name for item in old.attractions]
+            new_pois = [item.visit_key or item.name for item in new.attractions]
+            if old_pois != new_pois:
+                fields.append(f"{prefix}.attractions")
+            old_primary = [
+                item.visit_key or item.name for item in old.primary_plan
+            ]
+            new_primary = [
+                item.visit_key or item.name for item in new.primary_plan
+            ]
+            if old_primary != new_primary:
+                fields.append(f"{prefix}.primary_plan")
+            old_backup = [
+                item.visit_key or item.name for item in old.weather_backup
+            ]
+            new_backup = [
+                item.visit_key or item.name for item in new.weather_backup
+            ]
+            if old_backup != new_backup:
+                fields.append(f"{prefix}.weather_backup")
+            if old.weather_warning != new.weather_warning:
+                fields.append(f"{prefix}.weather_warning")
+            if (
+                old.hotel.model_dump(mode="json") if old.hotel else None
+            ) != (
+                new.hotel.model_dump(mode="json") if new.hotel else None
+            ):
+                fields.append(f"{prefix}.hotel")
+            if old.accommodation != new.accommodation:
+                fields.append(f"{prefix}.accommodation")
+            if old.schedule_blocks != new.schedule_blocks:
+                fields.append(f"{prefix}.schedule_blocks")
+        return fields
+
+    @staticmethod
+    def _scope_violations(
+        changed_fields: Sequence[str],
+        mutation_scope: Sequence[str],
+    ) -> List[str]:
+        def allowed(path: str) -> bool:
+            for pattern in mutation_scope:
+                if "[*]" in pattern:
+                    start, end = pattern.split("[*]", 1)
+                    if path.startswith(start + "[") and path.endswith(end):
+                        return True
+                if "[one]" in pattern:
+                    start, end = pattern.split("[one]", 1)
+                    if path.startswith(start + "[") and path.endswith(end):
+                        return True
+                if path == pattern:
+                    return True
+            return False
+
+        violations = [path for path in changed_fields if not allowed(path)]
+        for pattern in mutation_scope:
+            if "[one]" not in pattern:
+                continue
+            start, end = pattern.split("[one]", 1)
+            matches = [
+                path
+                for path in changed_fields
+                if path.startswith(start + "[") and path.endswith(end)
+            ]
+            day_prefixes = {path.split("].", 1)[0] for path in matches}
+            if len(day_prefixes) > 1:
+                violations.extend(matches)
+        return list(dict.fromkeys(violations))
+
+    @staticmethod
+    def _itinerary_snapshot(plan: TripPlan) -> List[dict]:
+        return [
+            {
+                "day": day.day_index + 1,
+                "pois": [item.name for item in day.attractions],
+                "hotel": day.hotel.name if day.hotel else None,
+                "travel_minutes": day.daily_travel_minutes,
+                "walking_km": round(day.daily_walking_distance_km, 3),
+                "utilization": round(day.day_utilization_score, 1),
+                "weather_backup": [
+                    item.name for item in day.weather_backup
+                ],
+                "weather_warning": day.weather_warning,
+            }
+            for day in plan.days
+        ]
+
+    @staticmethod
+    def _hard_violation_keys(plan: TripPlan) -> set[str]:
+        result = {
+            (
+                f"validation:{item.type}:{item.day}:{item.poi_name}:"
+                f"{item.message}"
+            )
+            for item in plan.validation_result.violations
+            if item.severity == "hard"
+        }
+        result.update(
+            f"legacy:{item.name}:{item.message}"
+            for item in plan.constraint_report.items
+            if not item.passed
+            and item.severity.lower() in {"blocker", "hard", "critical"}
+        )
+        return result
+
+    @staticmethod
+    def _issue_delta(
+        before: ExperienceEvaluation,
+        after: ExperienceEvaluation,
+    ) -> dict:
+        old = {item.fingerprint: item for item in before.issues}
+        new = {item.fingerprint: item for item in after.issues}
+        return {
+            "added": [
+                new[key].model_dump(mode="json")
+                for key in sorted(new.keys() - old.keys())
+            ],
+            "removed": [
+                old[key].model_dump(mode="json")
+                for key in sorted(old.keys() - new.keys())
+            ],
+            "remaining": sorted(new.keys() & old.keys()),
+        }
+
+    @staticmethod
+    def _target_issue_improved(
+        trigger: ExperienceIssue,
+        after: ExperienceEvaluation,
+    ) -> bool:
+        severity_rank = {"info": 0, "warning": 1, "high": 2, "critical": 3}
+        matches = [
+            item
+            for item in after.issues
+            if item.issue_type == trigger.issue_type
+            and item.day == trigger.day
+        ]
+        if not matches:
+            return True
+        return all(
+            item.resolution_status in {"mitigated", "resolved"}
+            or severity_rank[item.severity] < severity_rank[trigger.severity]
+            for item in matches
+        )
 
     def ensure_candidate_coverage(
         self,
@@ -1186,9 +2050,13 @@ class MultiAgentTripPlanner:
         proves that the deterministic landmark recall has already run.
         """
 
+        canonical_specialists = self._identity().deduplicate(
+            specialist_candidates,
+            must_visit=request.must_visit,
+        )
         unique = {
-            normalize_place_name(item.name): deepcopy(item)
-            for item in specialist_candidates
+            item.visit_key: deepcopy(item)
+            for item in canonical_specialists
         }
         minimum = min(30, max(request.travel_days * 2, request.travel_days))
         profile = build_preference_profile(request)
@@ -1215,7 +2083,8 @@ class MultiAgentTripPlanner:
             else request
         )
         for recalled in self.poi_collector.collect_attractions(recall_request):
-            key = normalize_place_name(recalled.name)
+            self._identity().assign_visit_keys([recalled])
+            key = recalled.visit_key
             existing = unique.get(key)
             if existing is None:
                 unique[key] = recalled
@@ -1326,6 +2195,17 @@ class MultiAgentTripPlanner:
         if replan_request.notes:
             plan.risk_warnings.append(f"重规划备注：{replan_request.notes}")
         plan = self.reviewer.review(plan, request)
+        selected_candidates = [
+            item for day in plan.days for item in day.attractions
+        ]
+        plan = self.run_quality_loop(
+            plan,
+            request,
+            selected_candidates,
+            hotel_candidates=[
+                day.hotel for day in plan.days if day.hotel is not None
+            ],
+        )
         if plan.observability_trace is None:
             selected = [
                 item
@@ -1405,7 +2285,22 @@ class MultiAgentTripPlanner:
         return result
 
     def _recalculate(self, plan: TripPlan, request: TripRequest) -> None:
+        removed_duplicates = self._identity().deduplicate_plan(
+            plan,
+            must_visit=request.must_visit,
+        )
+        if removed_duplicates:
+            plan.risk_warnings = sorted(
+                set(
+                    [
+                        *plan.risk_warnings,
+                        "已合并重复游览实体："
+                        + "、".join(sorted(set(removed_duplicates))),
+                    ]
+                )
+            )
         for day in plan.days:
+            self._annotate_available_window(day, len(plan.days), request)
             self._recalculate_day(day, request)
         plan.route_segments = [segment for day in plan.days for segment in day.route_segments]
         plan.budget = self.budget_estimator.estimate(plan.days, request)
@@ -1447,6 +2342,24 @@ class MultiAgentTripPlanner:
             ),
             items=[*legacy_report.items, *generic_items],
         )
+
+    @staticmethod
+    def _annotate_available_window(
+        day: DayPlan,
+        day_count: int,
+        request: TripRequest,
+    ) -> None:
+        start = _clock_minutes(request.daily_start_time, 9 * 60)
+        end = _clock_minutes(request.daily_end_time, 20 * 60)
+        reason = None
+        if day.day_index == 0 and request.arrival_time:
+            start = max(start, _clock_minutes(request.arrival_time, start))
+            reason = "arrival"
+        if day.day_index == day_count - 1 and request.departure_time:
+            end = min(end, _clock_minutes(request.departure_time, end))
+            reason = "departure"
+        day.available_minutes = max(0, end - start)
+        day.partial_day_reason = reason
 
     def _recalculate_day(self, day: DayPlan, request: TripRequest) -> None:
         day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
@@ -1624,7 +2537,9 @@ class MultiAgentTripPlanner:
                 unused,
                 key=lambda item: (-item.score, item.name, item.poi_id or ""),
             ):
-                if self._try_add_attraction(target_day, attraction, request):
+                if self._try_add_attraction(
+                    target_day, attraction, request, available_attractions
+                ):
                     return (
                         "fill_empty_day_with_feasible_attraction",
                         f"Added {attraction.name} to day {target_day.day_index + 1} "
@@ -1870,7 +2785,23 @@ class MultiAgentTripPlanner:
             ),
             default=0,
         )
+        profile = build_preference_profile(request)
+        preference_niche = (
+            attraction.selection_role == "niche_attraction"
+            and attraction.score_breakdown.get("preference_match", 0) > 0
+        )
+        if profile.deep_exploration:
+            portfolio_protection = 2 if preference_niche else 0
+        else:
+            portfolio_protection = (
+                2
+                if attraction.selection_role == "core_landmark"
+                else 1
+                if attraction.selection_role == "major_attraction"
+                else 0
+            )
         return (
+            portfolio_protection,
             attraction.popularity,
             attraction.first_visit_priority,
             attraction.score,
@@ -1903,11 +2834,8 @@ class MultiAgentTripPlanner:
     ) -> None:
         """One bounded deterministic replan when soft quality is below 70."""
 
-        planned_names = {
-            normalize_place_name(item.name)
-            for day in plan.days
-            for item in day.attractions
-        }
+        self._identity().assign_visit_keys(available_attractions)
+        planned_keys = self._identity().assigned_visit_keys(plan)
         for day in sorted(plan.days, key=lambda item: item.day_index):
             if (
                 (
@@ -1927,7 +2855,7 @@ class MultiAgentTripPlanner:
             candidates = [
                 item
                 for item in available_attractions
-                if normalize_place_name(item.name) not in planned_names
+                if item.visit_key not in planned_keys
                 and (
                     not day_areas
                     or item.area in day_areas
@@ -1949,8 +2877,10 @@ class MultiAgentTripPlanner:
                 )
             )
             for candidate in candidates:
-                if self._try_add_attraction(day, candidate, request):
-                    planned_names.add(normalize_place_name(candidate.name))
+                if self._try_add_attraction(
+                    day, candidate, request, available_attractions
+                ):
+                    planned_keys.add(candidate.visit_key)
                     self._recalculate_day(day, request)
                     if day.day_utilization_score >= 70:
                         break
@@ -2035,7 +2965,17 @@ class MultiAgentTripPlanner:
         target_day: DayPlan,
         attraction: Attraction,
         request: TripRequest,
+        candidate_pool: Sequence[Attraction] = (),
     ) -> bool:
+        decision = self._candidate_policy().evaluate(
+            attraction,
+            pool=candidate_pool or [attraction],
+            selected=target_day.attractions,
+            request=request,
+            entry_point="planner_repair_or_fill",
+        )
+        if not decision.accepted:
+            return False
         candidate = deepcopy(target_day)
         candidate.attractions.append(deepcopy(attraction))
         candidate.attractions = self.spatial_planner._nearest_neighbor_order(
@@ -2045,6 +2985,49 @@ class MultiAgentTripPlanner:
         )
         self._recalculate_day(candidate, request)
         if not self._day_is_feasible(candidate, request):
+            attraction.selection_trace.append(
+                {
+                    "entry_point": "planner_repair_or_fill",
+                    "accepted": False,
+                    "reason": "route_or_time_constraint",
+                    "route_increment_minutes": (
+                        candidate.daily_travel_minutes
+                        - target_day.daily_travel_minutes
+                    ),
+                }
+            )
+            return False
+        if (
+            request.max_daily_walk_km is not None
+            and candidate.daily_walking_distance_km > request.max_daily_walk_km
+        ):
+            attraction.selection_trace.append(
+                {
+                    "entry_point": "planner_repair_or_fill",
+                    "accepted": False,
+                    "reason": "walking_constraint",
+                    "route_increment_minutes": (
+                        candidate.daily_travel_minutes
+                        - target_day.daily_travel_minutes
+                    ),
+                }
+            )
+            return False
+        daily_budget = (
+            request.budget_limit / max(1, request.travel_days)
+            if request.budget_limit is not None
+            else None
+        )
+        if daily_budget is not None and (
+            target_day.daily_cost + attraction.ticket_price > daily_budget
+        ):
+            attraction.selection_trace.append(
+                {
+                    "entry_point": "planner_repair_or_fill",
+                    "accepted": False,
+                    "reason": "daily_budget_constraint",
+                }
+            )
             return False
         target_day.attractions = candidate.attractions
         return True
@@ -2102,6 +3085,7 @@ class MultiAgentTripPlanner:
         attractions: List[Attraction],
         hotel: Hotel,
         constraint_set: ConstraintSet | None = None,
+        planning_reference: Location | None = None,
     ) -> List[DayPlan]:
         start_date = datetime.strptime(request.start_date, "%Y-%m-%d")
         if not hasattr(self, "spatial_planner"):
@@ -2111,12 +3095,12 @@ class MultiAgentTripPlanner:
             travel_days=request.travel_days,
             pace=request.pace,
             must_visit=request.must_visit,
-            hotel_location=hotel.location,
+            hotel_location=planning_reference or hotel.location,
             transportation=request.transportation,
             daily_time_budget_minutes=daily_time_budget_minutes(request),
         )
         logger.info(
-            "========== 最终日程选点 ==========%s",
+            "========== 空间分配中间结果（constraint/repair/finalize 前） ==========%s",
             [
                 [f"{item.name}({item.score:.1f})" for item in group]
                 for group in daily_groups

@@ -35,9 +35,22 @@ async def plan_trip(request: TripRequest):
             request,
             trip_plan,
         )
+        executable = (
+            trip_plan.validation_result.valid
+            and trip_plan.quality_gate_passed
+            and not trip_plan.unresolved_blocking_issues
+        )
         return TripPlanResponse(
-            success=True,
-            message="旅行计划生成成功",
+            success=executable,
+            message=(
+                (
+                    "旅行计划已生成，并保留未解决的非阻断提示"
+                    if trip_plan.unresolved_non_blocking_issues
+                    else "旅行计划生成成功"
+                )
+                if executable
+                else "已返回包含完整 TripPlan 的 degraded best-effort 结果；请查看 degraded_reason、unresolved issues 和 suggested_alternatives"
+            ),
             data=trip_plan,
             session_id=session.id,
             plan_version=session.current_version,
@@ -57,7 +70,20 @@ async def replan_trip(request: ReplanRequest):
     try:
         planner = get_multi_agent_orchestrator()
         trip_plan = await run_in_threadpool(planner.replan, request)
-        return TripPlanResponse(success=True, message="行程已重新计算", data=trip_plan)
+        executable = (
+            trip_plan.validation_result.valid
+            and trip_plan.quality_gate_passed
+            and not trip_plan.unresolved_blocking_issues
+        )
+        return TripPlanResponse(
+            success=executable,
+            message=(
+                "行程已重新计算"
+                if executable
+                else "重规划仍有阻断问题；已返回非空 best-effort TripPlan 和处理建议"
+            ),
+            data=trip_plan,
+        )
     except Exception as exc:
         logger.exception("Trip replanning failed")
         raise HTTPException(status_code=500, detail=f"重规划失败: {exc}") from exc

@@ -19,6 +19,7 @@ from .poi_category_service import classify_poi
 class PreferenceProfile:
     first_visit: bool = False
     prefer_classic: bool = False
+    deep_exploration: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,15 @@ BEIJING_POI_METADATA: dict[str, POIMetadata] = {
     "798": POIMetadata(("art", "culture"), "朝阳区", 7, 5, 120, 6),
     "中国电影博物馆": POIMetadata(("museum", "film"), "朝阳区", 6, 3, 150, 5),
     "中国海关博物馆": POIMetadata(("museum", "specialist"), "东城区", 4, 2, 90, 3),
+    "国子监": POIMetadata(("historic", "culture"), "东城区", 8, 7, 120, 6),
+    "北京湖广会馆": POIMetadata(("historic", "specialist"), "西城区", 6, 5, 120, 5),
+    "正阳门箭楼": POIMetadata(("historic", "culture"), "东城区", 8, 7, 120, 7),
+    "首都博物馆": POIMetadata(("historic", "museum"), "西城区", 8, 8, 180, 7),
+    "史家胡同博物馆": POIMetadata(("historic", "museum", "specialist"), "东城区", 5, 4, 90, 4),
+    "北京动物园": POIMetadata(("zoo", "family"), "西城区", 9, 8, 180, 8),
+    "中国科学技术馆": POIMetadata(("museum", "family", "interactive_activity"), "朝阳区", 9, 8, 180, 7),
+    "亮马河国际风情水岸公园": POIMetadata(("park",), "朝阳区", 6, 5, 90, 5),
+    "念坛公园": POIMetadata(("park",), "大兴区", 5, 4, 90, 4),
 }
 
 _AREA_PATTERN = re.compile(
@@ -89,6 +99,18 @@ CITY_CLASSIC_NAMES: dict[str, set[str]] = {
     },
 }
 
+# A deliberately small coverage set. It is a candidate-portfolio policy, not a
+# hard-coded itinerary: the spatial planner still decides which feasible core
+# landmarks fit the requested trip.
+CITY_CORE_NAMES: dict[str, tuple[str, ...]] = {
+    "北京": ("故宫", "天坛", "颐和园", "国家博物馆", "八达岭长城"),
+    "上海": ("外滩", "上海博物馆", "豫园"),
+    "杭州": ("西湖", "灵隐寺"),
+    "成都": ("武侯祠", "杜甫草堂", "大熊猫"),
+    "广州": ("广州塔", "陈家祠"),
+    "深圳": ("世界之窗", "深圳湾公园"),
+}
+
 # --- 用户偏好关键词 → POI 分类映射 ---
 PREFERENCE_CATEGORY_MAP: dict[str, set[str]] = {
     "历史": {"historic", "temple"},
@@ -109,6 +131,10 @@ def get_city_classic_names(city: str) -> set[str]:
     return CITY_CLASSIC_NAMES.get(city, set())
 
 
+def get_city_core_names(city: str) -> tuple[str, ...]:
+    return CITY_CORE_NAMES.get(city, ())
+
+
 def preference_matches_categories(
     preferences: list[str], categories: set[str],
 ) -> bool:
@@ -120,9 +146,18 @@ def preference_matches_categories(
     if not preferences:
         return False
     for pref in preferences:
-        expected = PREFERENCE_CATEGORY_MAP.get(pref)
-        if expected and (categories & expected):
+        normalized_pref = pref.strip().lower()
+        if normalized_pref in {
+            category.strip().lower() for category in categories
+        }:
             return True
+        # Preferences arrive both as canonical tags ("历史") and natural
+        # language phrases ("深度历史游").  Phrase forms must retain the
+        # underlying topical match; otherwise an explicit deep-history trip
+        # is indistinguishable from a generic deep-exploration request.
+        for label, expected in PREFERENCE_CATEGORY_MAP.items():
+            if label in pref and categories & expected:
+                return True
     return False
 
 
@@ -134,10 +169,34 @@ def build_preference_profile(request: TripRequest) -> PreferenceProfile:
             *request.soft_preferences,
         ]
     )
+    deep_exploration = any(
+        term in text.lower()
+        for term in (
+            "多次到访",
+            "来过很多次",
+            "避开热门",
+            "小众",
+            "深度游",
+            "深度历史",
+            "专题研究",
+            "off the beaten path",
+            "avoid popular",
+            "repeat visitor",
+            "in-depth",
+        )
+    )
     inferred_first = any(term in text for term in ("第一次", "首次", "初次", "头一回"))
-    first_visit = request.first_visit if request.first_visit is not None else inferred_first
+    first_visit = (
+        request.first_visit
+        if request.first_visit is not None
+        else inferred_first
+    )
     inferred_classic = (
-        first_visit
+        (first_visit and not deep_exploration)
+        # An omitted visit-history answer should still receive the normal
+        # representative-city baseline.  `first_visit` records only what was
+        # explicit or inferable; it is not a proxy for that product default.
+        or (request.first_visit is None and not deep_exploration)
         or not request.preferences
         or any(term in text for term in ("经典", "地标", "必打卡"))
     )
@@ -146,7 +205,13 @@ def build_preference_profile(request: TripRequest) -> PreferenceProfile:
         if request.prefer_classic is not None
         else inferred_classic
     )
-    return PreferenceProfile(first_visit=first_visit, prefer_classic=prefer_classic)
+    if deep_exploration and request.prefer_classic is None:
+        prefer_classic = False
+    return PreferenceProfile(
+        first_visit=first_visit,
+        prefer_classic=prefer_classic,
+        deep_exploration=deep_exploration,
+    )
 
 
 def metadata_for_poi(
@@ -256,6 +321,10 @@ def enrich_attraction(
         curated_name in attraction.name
         for curated_name in classic_names
     ) and metadata.first_visit_priority >= 7
+    is_core_landmark = any(
+        core_name in attraction.name or attraction.name in core_name
+        for core_name in get_city_core_names(request.city)
+    )
     is_unknown_museum = (
         "博物馆" in attraction.name and not is_curated
     )
@@ -264,23 +333,57 @@ def enrich_attraction(
     )
 
     base_quality = metadata.popularity * 6                        # 0-60
-    classic_bonus = 30 if is_curated else 0                      # 0 或 30
+    classic_bonus = 30 if is_curated and profile.prefer_classic else 0
     pref_bonus = 10 if pref_matched else 0                       # 0 或 10
-    niche_penalty = -40 if is_unknown_museum else 0               # 0 或 -40
+    niche_penalty = (
+        0
+        if is_unknown_museum and profile.deep_exploration and pref_matched
+        else -40
+        if is_unknown_museum
+        else 0
+    )
+    deep_exploration_bonus = (
+        30 if profile.deep_exploration and pref_matched else 0
+    )
 
-    score = base_quality + classic_bonus + pref_bonus + niche_penalty
+    score = (
+        base_quality
+        + classic_bonus
+        + pref_bonus
+        + niche_penalty
+        + deep_exploration_bonus
+    )
     score = max(0, min(100, score))
 
     if any(name in attraction.name or attraction.name in name for name in request.must_visit):
         score = max(score, 100)
     attraction.score = max(0, min(100, score))
+    attraction.is_core_landmark = is_core_landmark
+    if is_core_landmark:
+        attraction.selection_role = "core_landmark"
+    elif (
+        metadata.first_visit_priority >= 7
+        and metadata.popularity >= 7
+    ):
+        attraction.selection_role = "major_attraction"
+    elif (
+        metadata.first_visit_priority <= 5
+        or any(term in f"{attraction.name} {' '.join(attraction.categories)}" for term in _NICHE_TERMS)
+        or "specialist" in attraction.categories
+    ):
+        attraction.selection_role = "niche_attraction"
+    else:
+        attraction.selection_role = "complementary_attraction"
     attraction.score_breakdown = {
         "base_quality": base_quality,
         "classic_bonus": classic_bonus,
         "pref_bonus": pref_bonus,
         "niche_penalty": niche_penalty,
+        "deep_exploration_bonus": deep_exploration_bonus,
         "preference_match": 10.0 if pref_matched else 0.0,  # 给 spatial_planner 兼容
         "is_curated": is_curated,
+        "is_core_landmark": 1.0 if is_core_landmark else 0.0,
+        "deep_exploration": 1.0 if profile.deep_exploration else 0.0,
     }
     if not attraction.recall_sources:
         attraction.recall_sources = ["specialist_agent"]

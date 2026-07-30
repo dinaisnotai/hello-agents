@@ -24,6 +24,8 @@ from ..models.schemas import Attraction, EvidenceSource, Hotel, TripPlan, TripRe
 from ..constraints.extractor import ConstraintExtractor
 from ..constraints.schema import ConstraintSet
 from ..services.place_name_service import normalize_place_name
+from ..services.accommodation_selector import AccommodationSelector
+from ..services.user_warning_service import curate_user_warnings
 from ..services.planning_observability import (
     build_planning_trace,
     emit_planning_trace,
@@ -303,7 +305,6 @@ class LangGraphTripWorkflow:
             attractions = AttractionSearchResult.model_validate(state.get("attraction_result", {}))
             weather = WeatherQueryResult.model_validate(state.get("weather_result", {}))
             hotels = HotelSearchResult.model_validate(state.get("hotel_result", {}))
-            hotel = hotels.recommended_hotel or (hotels.candidates[0] if hotels.candidates else Hotel(name=f"{request.city} hotel", type=request.accommodation))
             evidence = [EvidenceSource.model_validate(item) for item in state.get("rag_results", [])]
             constraint_set = ConstraintSet(
                 constraints=state.get("normalized_constraints", [])
@@ -319,6 +320,23 @@ class LangGraphTripWorkflow:
             planning_candidates = self._expand_candidate_pool(
                 request, attractions.attractions
             )
+            hotel_candidates = list(hotels.candidates)
+            if not hotel_candidates and hotels.recommended_hotel is not None:
+                hotel_candidates = [hotels.recommended_hotel]
+            selector = getattr(
+                self.orchestrator.plan_builder,
+                "accommodation_selector",
+                AccommodationSelector(),
+            )
+            hotel = selector.select(
+                request,
+                hotel_candidates,
+                planning_candidates,
+            )
+            if "hotel_candidates" in inspect.signature(
+                build_method
+            ).parameters:
+                kwargs["hotel_candidates"] = hotel_candidates
             plan = build_method(
                 request,
                 planning_candidates,
@@ -402,7 +420,40 @@ class LangGraphTripWorkflow:
             request = TripRequest.model_validate(state["request"])
             weather = WeatherQueryResult.model_validate(state.get("weather_result", {}))
             evidence = [EvidenceSource.model_validate(item) for item in state.get("rag_results", [])]
-            reviewed = self.orchestrator.planner_agent.review_plan(request, plan, weather, evidence)
+            candidates = [
+                Attraction.model_validate(item)
+                for item in state.get("planning_candidates", [])
+            ]
+            hotels = HotelSearchResult.model_validate(
+                state.get("hotel_result", {})
+            )
+            review_method = self.orchestrator.planner_agent.review_plan
+            review_kwargs = {}
+            review_parameters = inspect.signature(review_method).parameters
+            if "available_attractions" in review_parameters:
+                review_kwargs["available_attractions"] = candidates
+            if "hotel_candidates" in review_parameters:
+                review_kwargs["hotel_candidates"] = hotels.candidates
+            reviewed = review_method(
+                request,
+                plan,
+                weather,
+                evidence,
+                **review_kwargs,
+            )
+            if (
+                getattr(self.orchestrator.planner_agent, "agent", None) is None
+                and hasattr(
+                    self.orchestrator.plan_builder,
+                    "run_quality_loop",
+                )
+            ):
+                reviewed = self.orchestrator.plan_builder.run_quality_loop(
+                    reviewed,
+                    request,
+                    candidates,
+                    hotel_candidates=hotels.candidates,
+                )
             self._log(state, "soft_review", "completed")
             return {"deterministic_plan": reviewed.model_dump(mode="json"), "trace": [self._trace("soft_review", "completed")]}
         except Exception as exc:
@@ -420,6 +471,15 @@ class LangGraphTripWorkflow:
             plan.failure_reason = plan.failure_reason or "; ".join(
                 hard_messages
             )
+        if not plan.quality_gate_passed:
+            plan.risk_warnings = sorted(
+                set(
+                    [
+                        *plan.risk_warnings,
+                        "Quality Gate 未通过；返回 degraded result，并保留 unresolved issues。",
+                    ]
+                )
+            )
             plan.risk_warnings = sorted(
                 set(
                     [
@@ -428,17 +488,38 @@ class LangGraphTripWorkflow:
                     ]
                 )
             )
+        curate_user_warnings(plan)
         self._log(
             state,
             "finalize",
             (
                 "completed"
                 if plan.validation_result.valid
+                and plan.quality_gate_passed
                 else "hard_constraints_failed"
+                if not plan.validation_result.valid
+                else "quality_gate_failed"
             ),
             f"days={len(plan.days)}",
         )
-        return {"final_plan": plan.model_dump(mode="json"), "trace": [self._trace("finalize", "completed")]}
+        result = {
+            "final_plan": plan.model_dump(mode="json"),
+            "trace": [
+                self._trace(
+                    "finalize",
+                    (
+                        "completed"
+                        if plan.validation_result.valid
+                        and plan.quality_gate_passed
+                        else "degraded"
+                    ),
+                    plan.failure_reason or "",
+                )
+            ],
+        }
+        if not plan.quality_gate_passed:
+            result["degraded_services"] = ["quality_gate"]
+        return result
 
     def _next_after_validation(self, state: PlanningState) -> str:
         plan = TripPlan.model_validate(state["deterministic_plan"])
@@ -515,7 +596,7 @@ class LangGraphTripWorkflow:
     @staticmethod
     def _intent_from_request(request: TripRequest, source: str | None = None) -> TravelIntent:
         source = source or ("form_with_free_text" if request.free_text_input else "form")
-        return TravelIntent(city=request.city, start_date=request.start_date, end_date=request.end_date, travel_days=request.travel_days, transportation=request.transportation, accommodation=request.accommodation, preferences=request.preferences, must_visit=request.must_visit, budget_limit=request.budget_limit, pace=request.pace if request.pace in {"relaxed", "balanced", "packed"} else "balanced", travelers=request.travelers, energy_preference=request.energy_preference, daily_start_time=request.daily_start_time or "09:00", daily_end_time=request.daily_end_time or "20:00", hard_constraints=request.hard_constraints, soft_preferences=request.soft_preferences, free_text=request.free_text_input or "", intent_source=source)
+        return TravelIntent(city=request.city, start_date=request.start_date, end_date=request.end_date, travel_days=request.travel_days, transportation=request.transportation, accommodation=request.accommodation, preferences=request.preferences, must_visit=request.must_visit, budget_limit=request.budget_limit, pace=request.pace if request.pace in {"relaxed", "balanced", "packed"} else "balanced", travelers=request.travelers, energy_preference=request.energy_preference, daily_start_time=request.daily_start_time or "09:00", daily_end_time=request.daily_end_time or "20:00", arrival_time=request.arrival_time, departure_time=request.departure_time, hard_constraints=request.hard_constraints, soft_preferences=request.soft_preferences, free_text=request.free_text_input or "", intent_source=source)
 
     @staticmethod
     def _merge_supplement(request: TripRequest, supplement: FreeTextIntentSupplement) -> TripRequest:

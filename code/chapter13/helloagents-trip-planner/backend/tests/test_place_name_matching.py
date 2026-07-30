@@ -69,6 +69,44 @@ class PlaceNameMatchingTest(unittest.TestCase):
         self.assertEqual(len(attractions), 1)
         self.assertEqual(attractions[0].score, 100)
 
+    def test_hotel_collector_rejects_non_lodging_pois_instead_of_numbering_them(self):
+        service = AmapService()
+        non_lodging = [
+            POIInfo(
+                id="museum-1",
+                name="国家博物馆",
+                type="风景名胜;博物馆",
+                location=Location(longitude=116.407, latitude=39.904),
+            ),
+            POIInfo(
+                id="mall-1",
+                name="王府井商场",
+                type="购物服务;商场",
+                location=Location(longitude=116.411, latitude=39.908),
+            ),
+        ]
+        with patch.object(service, "search_poi", return_value=non_lodging):
+            hotels = POICollector(service).collect_hotels(make_request())
+
+        self.assertEqual(len(hotels), 1)
+        self.assertIn("待确认", hotels[0].name)
+        self.assertNotIn("推荐酒店", hotels[0].name)
+        self.assertIsNone(hotels[0].location)
+
+    def test_hotel_collector_preserves_verified_provider_hotel_name(self):
+        service = AmapService()
+        provider_hotel = POIInfo(
+            id="hotel-1",
+            name="北京东方酒店",
+            type="住宿服务;宾馆酒店",
+            location=Location(longitude=116.40, latitude=39.91),
+        )
+        with patch.object(service, "search_poi", return_value=[provider_hotel]):
+            hotels = POICollector(service).collect_hotels(make_request())
+
+        self.assertEqual(hotels[0].name, "北京东方酒店")
+        self.assertIsNotNone(hotels[0].location)
+
     def test_each_must_visit_is_kept_exactly_once_when_candidates_are_truncated(self):
         service = AmapService()
         ordinary = [

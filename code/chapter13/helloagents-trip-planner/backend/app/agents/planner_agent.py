@@ -9,6 +9,7 @@ from time import perf_counter
 from typing import List, Optional
 
 from hello_agents import HelloAgentsLLM, SimpleAgent
+from pydantic import ValidationError
 
 from ..models.agent_outputs import (
     AttractionSearchResult,
@@ -17,6 +18,11 @@ from ..models.agent_outputs import (
     WeatherQueryResult,
 )
 from ..models.schemas import EvidenceSource, Hotel, TripPlan, TripRequest
+from ..models.quality import ExperienceEvaluation
+from ..services.accommodation_selector import AccommodationSelector
+from ..services.itinerary_quality import ItineraryCompletenessGate
+from ..services.planning_observability import refresh_planning_trace
+from ..services.user_warning_service import curate_user_warnings
 from .agent_utils import parse_agent_result, run_stateless_agent
 from .prompts import PLANNER_PROMPT
 from .trip_planner_agent import MultiAgentTripPlanner
@@ -56,7 +62,14 @@ class PlannerAgent:
         """Build the executable plan first, then request a non-mutating review."""
 
         deterministic_started_at = perf_counter()
-        hotel = self._select_hotel(request, hotel_result)
+        candidates = list(hotel_result.candidates)
+        if not candidates and hotel_result.recommended_hotel is not None:
+            candidates = [hotel_result.recommended_hotel]
+        hotel = AccommodationSelector().select(
+            request,
+            candidates,
+            attraction_result.attractions,
+        )
         plan = self.plan_builder.build_plan_from_inputs(
             request=request,
             attractions=attraction_result.attractions,
@@ -71,7 +84,14 @@ class PlannerAgent:
             "[PlannerAgent] deterministic planning elapsed_ms=%.1f",
             (perf_counter() - deterministic_started_at) * 1000,
         )
-        return self.review_plan(request, plan, weather_result, evidence)
+        return self.review_plan(
+            request,
+            plan,
+            weather_result,
+            evidence,
+            available_attractions=attraction_result.attractions,
+            hotel_candidates=candidates,
+        )
 
     def review_plan(
         self,
@@ -79,11 +99,15 @@ class PlannerAgent:
         plan: TripPlan,
         weather_result: WeatherQueryResult,
         evidence: List[EvidenceSource],
+        *,
+        available_attractions=None,
+        hotel_candidates=None,
     ) -> TripPlan:
         """Apply the optional LLM review to an already-built deterministic plan."""
 
         if self.agent is None:
             self.last_warning = "LLM 未启用，已跳过 PlannerAgent 软审查"
+            curate_user_warnings(plan)
             return plan
 
         try:
@@ -92,6 +116,7 @@ class PlannerAgent:
                 plan,
                 weather_result,
                 evidence,
+                available_attractions=available_attractions or [],
             )
             review_input = json.dumps(review_payload, ensure_ascii=False)
             logger.info(
@@ -108,19 +133,142 @@ class PlannerAgent:
                 "[PlannerAgent] LLM review elapsed_ms=%.1f",
                 (perf_counter() - review_started_at) * 1000,
             )
-            review = parse_agent_result(raw_result, PlannerReviewResult)
-            logger.info(
-                "[PlannerAgent] LLM review output summary=%s soft_warnings=%d",
-                review.summary.strip()[:300] or "(empty)",
-                len(review.soft_warnings),
-            )
-            self._apply_review(plan, review, evidence)
+            try:
+                evaluation = parse_agent_result(
+                    raw_result,
+                    ExperienceEvaluation,
+                )
+                for issue in evaluation.issues:
+                    issue.source = "llm"
+                evaluation.source = "llm"
+                logger.info(
+                    "[PlannerAgent] structured evaluation pass=%s score=%.1f issues=%d",
+                    evaluation.passed,
+                    evaluation.overall_score,
+                    len(evaluation.issues),
+                )
+                if hasattr(self.plan_builder, "run_quality_loop"):
+                    def evaluator(candidate_plan):
+                        return self.evaluate_experience(
+                            request,
+                            candidate_plan,
+                            weather_result,
+                            evidence,
+                            available_attractions=available_attractions or [],
+                        )
+
+                    plan = self.plan_builder.run_quality_loop(
+                        plan,
+                        request,
+                        available_attractions or [],
+                        hotel_candidates=hotel_candidates or [],
+                        external_evaluator=evaluator,
+                        initial_external_evaluation=evaluation,
+                    )
+                else:
+                    plan.quality_evaluation = evaluation
+                    plan.quality_gate_passed = evaluation.passed
+                    plan.unresolved_quality_issues = [
+                        item
+                        for item in evaluation.issues
+                        if item.severity in {"critical", "high"}
+                    ]
+                plan.risk_warnings = sorted(
+                    set(
+                        [
+                            *plan.risk_warnings,
+                            *[
+                                f"ExperienceEvaluator: {item.evidence}"
+                                for item in evaluation.issues
+                            ],
+                        ]
+                    )
+                )
+            except ValidationError as exc:
+                if self._has_unknown_strategy(exc):
+                    evaluation = ExperienceEvaluation(
+                        **{
+                            "pass": True,
+                            "overall_score": (
+                                plan.quality_evaluation.overall_score
+                                if plan.quality_evaluation
+                                else 10
+                            ),
+                            "issues": [],
+                            "source": "llm",
+                            "contract_errors": [
+                                "Experience reviewer contract error: "
+                                + self._contract_error_message(exc)
+                            ],
+                        }
+                    )
+                    plan.quality_evaluation = evaluation
+                    plan.risk_warnings = sorted(
+                        set([*plan.risk_warnings, *evaluation.contract_errors])
+                    )
+                    logger.error(evaluation.contract_errors[0])
+                else:
+                    review = parse_agent_result(raw_result, PlannerReviewResult)
+                    self._apply_review(plan, review, evidence)
+            except Exception:
+                # Backward compatibility for previously configured reviewer
+                # prompts. New production prompts always use the structured
+                # ExperienceEvaluation contract above.
+                review = parse_agent_result(raw_result, PlannerReviewResult)
+                self._apply_review(plan, review, evidence)
             self.last_warning = ""
         except Exception as exc:
             # The deterministic plan is already complete. LLM review failure
             # must not turn a valid itinerary into an API failure.
             self.last_warning = f"PlannerAgent 软审查失败：{exc}"
+        curate_user_warnings(plan)
+        refresh_planning_trace(plan)
         return plan
+
+    def evaluate_experience(
+        self,
+        request: TripRequest,
+        plan: TripPlan,
+        weather_result: WeatherQueryResult,
+        evidence: List[EvidenceSource],
+        *,
+        available_attractions=None,
+    ) -> ExperienceEvaluation | None:
+        if self.agent is None:
+            return None
+        payload = self._build_review_payload(
+            request,
+            plan,
+            weather_result,
+            evidence,
+            available_attractions=available_attractions or [],
+        )
+        with self._run_lock:
+            raw_result = run_stateless_agent(
+                self.agent,
+                json.dumps(payload, ensure_ascii=False),
+            )
+        try:
+            evaluation = parse_agent_result(raw_result, ExperienceEvaluation)
+        except ValidationError as exc:
+            return ExperienceEvaluation(
+                **{
+                    "pass": True,
+                    "overall_score": plan.quality_evaluation.overall_score
+                    if plan.quality_evaluation
+                    else 10,
+                    "issues": [],
+                    "source": "llm",
+                    "contract_errors": [
+                        "Experience reviewer contract error: "
+                        + self._contract_error_message(exc)
+                    ],
+                }
+            )
+        evaluation.source = "llm"
+        for issue in evaluation.issues:
+            issue.source = "llm"
+        return evaluation
 
     def _build_review_payload(
         self,
@@ -128,52 +276,89 @@ class PlannerAgent:
         plan: TripPlan,
         weather_result: WeatherQueryResult,
         evidence: List[EvidenceSource],
+        *,
+        available_attractions,
     ) -> dict:
-        """Send only review-relevant facts, not coordinates/photos/full route steps."""
+        """Build the complete, auditable Experience Evaluator input."""
 
+        assigned = {
+            item.visit_key or item.poi_id or item.name
+            for day in plan.days
+            for item in day.attractions
+        }
+        remaining = [
+            item
+            for item in available_attractions
+            if (item.visit_key or item.poi_id or item.name) not in assigned
+        ]
+        gate = getattr(
+            self.plan_builder,
+            "completeness_gate",
+            ItineraryCompletenessGate(),
+        )
         return {
             "request": request.model_dump(mode="json"),
-            "plan": {
-                "city": plan.city,
-                "start_date": plan.start_date,
-                "end_date": plan.end_date,
-                "days": [
-                    {
-                        "date": day.date,
-                        "transportation": day.transportation,
-                        "attractions": [
-                            {
-                                "name": attraction.name,
-                                "category": attraction.category,
-                                "visit_duration": attraction.visit_duration,
-                            }
-                            for attraction in day.attractions
-                        ],
-                        "routes": [
-                            {
-                                "origin": segment.origin,
-                                "destination": segment.destination,
-                                "route_type": segment.route_type,
-                                "duration_minutes": segment.duration_minutes,
-                                "walking_distance_meters": segment.walking_distance_meters,
-                                "walking_duration_minutes": segment.walking_duration_minutes,
-                                "transit_duration_minutes": segment.transit_duration_minutes,
-                            }
-                            for segment in day.route_segments
-                        ],
-                        "daily_distance_km": day.daily_distance_km,
-                        "daily_walking_distance_km": day.daily_walking_distance_km,
-                        "daily_visit_minutes": day.daily_visit_minutes,
-                        "daily_travel_minutes": day.daily_travel_minutes,
-                        "daily_duration_minutes": day.daily_duration_minutes,
-                    }
-                    for day in plan.days
-                ],
-                "budget": plan.budget.model_dump(mode="json") if plan.budget else None,
-                "constraint_report": plan.constraint_report.model_dump(mode="json"),
-                "risk_warnings": plan.risk_warnings,
+            "plan": plan.model_dump(
+                mode="json",
+                exclude={"observability_trace"},
+            ),
+            "hotels": [
+                day.hotel.model_dump(mode="json")
+                for day in plan.days
+                if day.hotel is not None
+            ],
+            "observability": {
+                "candidate_pois": (
+                    [
+                        item.model_dump(mode="json")
+                        for item in plan.observability_trace.candidate_pois
+                    ]
+                    if plan.observability_trace
+                    else []
+                ),
+                "validation_result": (
+                    plan.observability_trace.validation_result.model_dump(
+                        mode="json"
+                    )
+                    if plan.observability_trace
+                    else {}
+                ),
             },
             "weather_risks": weather_result.risk_summary,
+            "review_context": {
+                "previous_issues": [
+                    item.model_dump(mode="json")
+                    for repair in plan.repair_history
+                    for item in repair.issues_before
+                ],
+                "previous_attempts": [
+                    {
+                        "issue_fingerprint": repair.issue_fingerprint,
+                        "repair_action": repair.selected_action,
+                        "repair_result": repair.action_result,
+                        "accepted": repair.accepted,
+                        "failure_reason": repair.rejection_reason,
+                    }
+                    for repair in plan.repair_history
+                ],
+                "available_candidate_categories": sorted(
+                    {
+                        category
+                        for item in remaining
+                        for category in (
+                            item.categories or [item.category or "general"]
+                        )
+                    }
+                ),
+                "indoor_candidates_count": sum(
+                    gate._is_indoor(item) for item in remaining
+                ),
+                "remaining_candidate_count": len(remaining),
+                "instruction": (
+                    "Do not repeat a failed issue fingerprint and repair "
+                    "strategy unless the candidate evidence changed."
+                ),
+            },
             "evidence": [
                 {
                     "title": item.title,
@@ -183,6 +368,25 @@ class PlannerAgent:
                 for item in evidence
             ],
         }
+
+    @staticmethod
+    def _contract_error_message(exc: ValidationError) -> str:
+        errors = exc.errors(include_url=False)
+        unknown = [
+            item for item in errors
+            if tuple(item.get("loc", ()))[-1:] == ("repair_strategy",)
+        ]
+        if unknown:
+            value = unknown[0].get("input")
+            return f"unsupported repair_strategy={value!r}"
+        return str(exc)
+
+    @staticmethod
+    def _has_unknown_strategy(exc: ValidationError) -> bool:
+        return any(
+            tuple(item.get("loc", ()))[-1:] == ("repair_strategy",)
+            for item in exc.errors(include_url=False)
+        )
 
     def _select_hotel(
         self,

@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..models.schemas import Attraction, Location
 from .attraction_scorer import AttractionScorer
+from .candidate_acceptance_policy import CandidateAcceptancePolicy
 from .place_name_service import normalize_place_name, place_names_match
 
 
@@ -239,7 +240,7 @@ class SpatialItineraryPlanner:
 
         unique = {}
         for attraction in attractions:
-            key = normalize_place_name(attraction.name)
+            key = attraction.visit_key or normalize_place_name(attraction.name)
             existing = unique.get(key)
             if existing is None or self._priority_key(
                 attraction, must_visit
@@ -259,6 +260,89 @@ class SpatialItineraryPlanner:
             item for item in ranked if not self._is_must_visit(item, must_visit)
         ]
         selected = list(required)
+        policy = CandidateAcceptancePolicy()
+        for item in selected:
+            policy.evaluate(
+                item,
+                pool=ranked,
+                selected=[],
+                request=None,
+                entry_point="initial_must_visit_selection",
+            )
+        deep_exploration = any(
+            item.score_breakdown.get("deep_exploration", 0) > 0
+            for item in ranked
+        )
+        portfolio_enabled = any(
+            "base_quality" in item.score_breakdown for item in ranked
+        )
+        core_candidates = [
+            item
+            for item in optional
+            if self._portfolio_role(item) == "core_landmark"
+        ]
+        core_quota = (
+            0
+            if deep_exploration
+            else min(travel_days, len(core_candidates))
+        )
+        selected.extend(core_candidates[:core_quota])
+        for item in core_candidates[:core_quota]:
+            policy.evaluate(
+                item, pool=ranked, selected=selected, request=None,
+                entry_point="initial_core_quota",
+            )
+        optional = [
+            item for item in optional if item not in core_candidates[:core_quota]
+        ]
+        remaining_capacity = max(0, selection_limit - len(selected))
+        major_candidates = [
+            item
+            for item in optional
+            if self._portfolio_role(item) == "major_attraction"
+        ]
+        major_quota = (
+            0
+            if deep_exploration
+            else min(travel_days, remaining_capacity, len(major_candidates))
+        )
+        selected.extend(major_candidates[:major_quota])
+        for item in major_candidates[:major_quota]:
+            policy.evaluate(
+                item, pool=ranked, selected=selected, request=None,
+                entry_point="initial_major_quota",
+            )
+        optional = [
+            item
+            for item in optional
+            if item not in major_candidates[:major_quota]
+        ]
+        if deep_exploration:
+            deep_niche_candidates = [
+                item
+                for item in optional
+                if self._portfolio_role(item) == "niche_attraction"
+                and self._has_explicit_preference_match(item)
+            ]
+            deep_niche_candidates.sort(
+                key=lambda item: self._priority_key(item, must_visit)
+            )
+            reserve = min(
+                max(2, travel_days),
+                selection_limit - len(selected),
+                len(deep_niche_candidates),
+            )
+            selected.extend(deep_niche_candidates[:reserve])
+            for item in deep_niche_candidates[:reserve]:
+                policy.evaluate(
+                    item, pool=ranked, selected=selected, request=None,
+                    entry_point="initial_deep_niche_reserve",
+                )
+            optional = [
+                item
+                for item in optional
+                if item not in deep_niche_candidates[:reserve]
+            ]
         # A low-score POI must not become a destination simply because it is
         # in a separate area. Keep it only as a last-resort coverage fallback.
         quality_optional = [
@@ -282,29 +366,74 @@ class SpatialItineraryPlanner:
 
         # With no explicit matching preference, specialist cultural venues
         # may supplement a trip but cannot consume most of the planning pool.
-        niche_cultural_cap = max(1, math.ceil(travel_days / 2))
+        niche_cap = (
+            max(1, math.ceil(selection_limit * 0.7))
+            if deep_exploration
+            else max(1, math.floor(selection_limit * 0.25))
+        )
         deferred: List[Attraction] = []
         while optional and len(selected) < selection_limit:
             ranked_optional = sorted(
                 optional,
                 key=lambda item: (
                     self._priority_key(item, must_visit)[1]
-                    + bucket_counts.get(self._diversity_bucket(item), 0) * 12,
+                    + bucket_counts.get(self._diversity_bucket(item), 0) * 18,
                     *self._priority_key(item, must_visit)[2:],
                 ),
             )
             chosen = None
             for item in ranked_optional:
+                bucket = self._diversity_bucket(item)
                 if (
-                    self._is_niche_cultural(item)
-                    and not self._has_explicit_preference_match(item)
+                    deep_exploration
+                    and self._portfolio_role(item) == "core_landmark"
                     and sum(
-                        self._is_niche_cultural(existing)
-                        and not self._has_explicit_preference_match(existing)
+                        self._portfolio_role(existing) == "core_landmark"
                         for existing in selected
-                    )
-                    >= niche_cultural_cap
+                    ) >= max(1, travel_days // 2)
                 ):
+                    deferred.append(item)
+                    optional.remove(item)
+                    continue
+                if (
+                    portfolio_enabled
+                    and not deep_exploration
+                    and bucket_counts.get(bucket, 0) >= 2
+                ):
+                    deferred.append(item)
+                    optional.remove(item)
+                    continue
+                if (
+                    portfolio_enabled
+                    and not deep_exploration
+                    and len(selected) >= minimum_pool
+                    and item.score < 40
+                ):
+                    deferred.append(item)
+                    optional.remove(item)
+                    continue
+                if (
+                    self._portfolio_role(item) == "niche_attraction"
+                    and sum(
+                        self._portfolio_role(existing) == "niche_attraction"
+                        for existing in selected
+                    ) >= niche_cap
+                    # Strong, explicit specialist requests can still use the
+                    # legacy focused-candidate path. Ordinary preference
+                    # boosts are 10, while this path requires 20+.
+                    and item.score_breakdown.get("preference_match", 0) < 20
+                ):
+                    deferred.append(item)
+                    optional.remove(item)
+                    continue
+                decision = policy.evaluate(
+                    item,
+                    pool=ranked,
+                    selected=selected,
+                    request=None,
+                    entry_point="initial_portfolio_fill",
+                )
+                if not decision.accepted:
                     deferred.append(item)
                     optional.remove(item)
                     continue
@@ -313,6 +442,9 @@ class SpatialItineraryPlanner:
             if chosen is None:
                 break
             selected.append(chosen)
+            chosen.score_breakdown["saturation_penalty"] = float(
+                bucket_counts.get(self._diversity_bucket(chosen), 0) * 18
+            )
             optional.remove(chosen)
             bucket = self._diversity_bucket(chosen)
             bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
@@ -323,11 +455,74 @@ class SpatialItineraryPlanner:
         for item in deferred:
             if len(selected) >= minimum_pool:
                 break
+            if (
+                not deep_exploration
+                and self._portfolio_role(item) == "niche_attraction"
+                and sum(
+                    self._portfolio_role(existing) == "niche_attraction"
+                    for existing in selected
+                ) >= niche_cap
+                and item.score_breakdown.get("preference_match", 0) < 20
+            ):
+                continue
+            if not policy.evaluate(
+                item,
+                pool=ranked,
+                selected=selected,
+                request=None,
+                entry_point="initial_deferred_fill",
+            ).accepted:
+                continue
             selected.append(item)
+        selected_keys = {
+            item.visit_key or normalize_place_name(item.name)
+            for item in selected
+        }
+        for item in ranked:
+            role = self._portfolio_role(item)
+            item.selection_role = role
+            key = item.visit_key or normalize_place_name(item.name)
+            if key in selected_keys:
+                item.selection_reason = (
+                    "must_visit"
+                    if self._is_must_visit(item, must_visit)
+                    else "core_landmark_quota"
+                    if role == "core_landmark" and not deep_exploration
+                    else "major_attraction_quota"
+                    if role == "major_attraction" and not deep_exploration
+                    else "preference_calibrated_portfolio_fill"
+                )
+            elif role in {"core_landmark", "major_attraction"}:
+                item.selection_reason = (
+                    "not_selected_after_feasibility_capacity_and_route_tradeoff"
+                )
+            elif role == "niche_attraction":
+                item.selection_reason = (
+                    "not_selected_due_to_niche_quota_or_saturation"
+                )
+            else:
+                item.selection_reason = "not_selected_by_portfolio_capacity"
         return sorted(
             selected,
             key=lambda item: self._priority_key(item, must_visit),
         )
+
+    @classmethod
+    def _portfolio_role(cls, attraction: Attraction) -> str:
+        if attraction.is_core_landmark:
+            return "core_landmark"
+        if attraction.selection_role != "complementary_attraction":
+            return attraction.selection_role
+        if (
+            attraction.first_visit_priority >= 7
+            and attraction.popularity >= 7
+        ):
+            return "major_attraction"
+        if (
+            cls._is_niche_cultural(attraction)
+        ):
+            return "niche_attraction"
+        return "complementary_attraction"
 
     @staticmethod
     def _has_explicit_preference_match(attraction: Attraction) -> bool:
@@ -482,6 +677,46 @@ class SpatialItineraryPlanner:
         for index, area in enumerate(area_order[:active_days]):
             groups[index].append(buckets[area].pop(0))
             group_areas[index].add(area)
+
+        # A city-wide core coverage decision is ineffective if the area
+        # seeding step immediately displaces a second core landmark merely
+        # because it shares an area with the first one.  When a selected core
+        # is still unseeded, prefer it over a non-core seed.  This does not
+        # add capacity or relax timing; it only gives the route optimizer a
+        # feasible day in which to place the already-selected core POI.
+        if any("base_quality" in item.score_breakdown for item in attractions):
+            unseeded_cores = sorted(
+                (
+                    item
+                    for area in area_order
+                    for item in buckets[area]
+                    if self._portfolio_role(item) == "core_landmark"
+                ),
+                key=lambda item: self._priority_key(item, must_visit),
+            )
+            replaceable_days = sorted(
+                (
+                    day_index
+                    for day_index, group in enumerate(groups)
+                    if group
+                    and self._portfolio_role(group[0]) != "core_landmark"
+                ),
+                key=lambda day_index: self._priority_key(
+                    groups[day_index][0], must_visit
+                ),
+                reverse=True,
+            )
+            for core, day_index in zip(unseeded_cores, replaceable_days):
+                old_seed = groups[day_index][0]
+                old_area = next(iter(group_areas[day_index]))
+                core_area = core.area or self._nearest_known_area(core, attractions)
+                buckets[core_area].remove(core)
+                buckets.setdefault(old_area, []).append(old_seed)
+                buckets[old_area].sort(
+                    key=lambda item: self._priority_key(item, must_visit)
+                )
+                groups[day_index] = [core]
+                group_areas[day_index] = {core_area}
 
         # When there are fewer areas than travel days, split a large area
         # across multiple days instead of leaving a day empty.
@@ -733,6 +968,10 @@ class SpatialItineraryPlanner:
             target_index = min(range(len(groups)), key=lambda index: timings[index].total_minutes)
             if timings[donor_index].total_minutes - timings[target_index].total_minutes < 90:
                 break
+            spread_before = (
+                max(item.total_minutes for item in timings)
+                - min(item.total_minutes for item in timings)
+            )
             optional = [item for item in groups[donor_index] if not self._is_must_visit(item, must_visit)]
             moved = False
             for attraction in sorted(optional, key=lambda item: (item.visit_duration, item.score, item.name), reverse=True):
@@ -756,7 +995,34 @@ class SpatialItineraryPlanner:
                     transportation,
                     time_budget_minutes,
                 )
-                if self.estimate_day_timing(proposed, hotel_location, transportation, profile).total_minutes > time_budget_minutes:
+                proposed_timing = self.estimate_day_timing(
+                    proposed,
+                    hotel_location,
+                    transportation,
+                    profile,
+                )
+                if proposed_timing.total_minutes > time_budget_minutes:
+                    continue
+                donor_after = [
+                    item
+                    for item in groups[donor_index]
+                    if item is not attraction
+                ]
+                donor_timing = self.estimate_day_timing(
+                    donor_after,
+                    hotel_location,
+                    transportation,
+                    profile,
+                )
+                new_totals = [
+                    timing.total_minutes
+                    for index, timing in enumerate(timings)
+                    if index not in {donor_index, target_index}
+                ] + [
+                    donor_timing.total_minutes,
+                    proposed_timing.total_minutes,
+                ]
+                if max(new_totals) - min(new_totals) >= spread_before:
                     continue
                 groups[donor_index].remove(attraction)
                 groups[target_index] = proposed
@@ -903,7 +1169,11 @@ class SpatialItineraryPlanner:
                     ordered,
                 )
             )
-        return min(completed)[2] if completed else ranked
+        return (
+            min(completed, key=lambda item: (item[0], item[1]))[2]
+            if completed
+            else ranked
+        )
 
     @staticmethod
     def _partial_route_score(
