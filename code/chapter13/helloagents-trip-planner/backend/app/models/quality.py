@@ -27,6 +27,78 @@ class RepairStrategy(str, Enum):
     RESOLVE_SAFETY_RISK = "RESOLVE_SAFETY_RISK"
 
 
+class RepairAttemptStatus(str, Enum):
+    """Lifecycle of an isolated plan mutation attempt."""
+
+    CREATED = "created"
+    APPLIED = "applied"
+    VALIDATED = "validated"
+    COMMITTED = "committed"
+    ROLLED_BACK = "rolled_back"
+    FAILED = "failed"
+
+
+class CommitDecisionCode(str, Enum):
+    """Stable, explainable outcomes of the candidate commit gate."""
+
+    COMMITTED = "COMMITTED"
+    NEW_HARD_VIOLATION = "NEW_HARD_VIOLATION"
+    TARGET_ISSUE_NOT_IMPROVED = "TARGET_ISSUE_NOT_IMPROVED"
+    QUALITY_REGRESSION = "QUALITY_REGRESSION"
+    STALE_BASE_PLAN_VERSION = "STALE_BASE_PLAN_VERSION"
+    RECOMPUTE_FAILED = "RECOMPUTE_FAILED"
+    MUTATION_FAILED = "MUTATION_FAILED"
+    INVALID_CANDIDATE = "INVALID_CANDIDATE"
+
+
+class PlanVersionMetadata(BaseModel):
+    """Lineage metadata for the currently committed itinerary only."""
+
+    version: int = Field(default=1, ge=1)
+    parent_version: int | None = Field(default=None, ge=1)
+    mutation_source: Literal[
+        "initial_planner", "repair_controller", "replan", "resume"
+    ] = "initial_planner"
+    mutation_action: str = "initial_plan"
+    mutation_reason: str = "initial_planner"
+    attempt_id: str | None = None
+    created_at: str = ""
+
+
+class PlanDiff(BaseModel):
+    """Stable identity based summary of a candidate plan mutation."""
+
+    changed_days: list[int] = Field(default_factory=list)
+    added_poi_ids: list[str] = Field(default_factory=list)
+    removed_poi_ids: list[str] = Field(default_factory=list)
+    moved_poi_ids: list[str] = Field(default_factory=list)
+    hotel_changed: bool = False
+    route_changed: bool = False
+    cost_delta: float = 0
+    walking_delta: float = 0
+    transport_time_delta: int = 0
+
+
+class RepairAttempt(BaseModel):
+    """Auditable sandbox execution; rejected candidates never become versions."""
+
+    attempt_id: str
+    base_plan_version: int = Field(ge=1)
+    issue_fingerprint: str
+    issue_type: str
+    repair_strategy: RepairStrategy
+    status: RepairAttemptStatus = RepairAttemptStatus.CREATED
+    validation_before: dict[str, Any] = Field(default_factory=dict)
+    validation_after: dict[str, Any] = Field(default_factory=dict)
+    quality_before: dict[str, Any] = Field(default_factory=dict)
+    quality_after: dict[str, Any] = Field(default_factory=dict)
+    quality_delta: float = 0
+    plan_diff: PlanDiff = Field(default_factory=PlanDiff)
+    rollback_reason: str = ""
+    error: str = ""
+    committed_plan_version: int | None = None
+
+
 IssueType = Literal[
     "empty_day",
     "underfilled_day",
@@ -160,4 +232,5 @@ class QualityGateTrace(BaseModel):
     reviewer_issues: list[dict[str, Any]] = Field(default_factory=list)
     contract_errors: list[str] = Field(default_factory=list)
     repair_iterations: list[dict[str, Any]] = Field(default_factory=list)
+    repair_attempts: list[dict[str, Any]] = Field(default_factory=list)
     final_reason: str = ""

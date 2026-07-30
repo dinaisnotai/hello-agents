@@ -33,6 +33,32 @@ class RepairController:
         issue: ExperienceIssue,
     ) -> RepairProposal | None:
         candidate_plan = deepcopy(plan)
+        action = self.apply_to_candidate(
+            candidate_plan,
+            request,
+            candidates,
+            hotel_candidates,
+            issue,
+        )
+        return (
+            RepairProposal(
+                plan=candidate_plan,
+                action=action,
+                mutation_scope=self.mutation_scope(issue.repair_strategy, issue.day),
+            )
+            if action
+            else None
+        )
+
+    def apply_to_candidate(
+        self,
+        candidate_plan: TripPlan,
+        request: TripRequest,
+        candidates: Sequence[Attraction],
+        hotel_candidates: Sequence[Hotel],
+        issue: ExperienceIssue,
+    ) -> str | None:
+        """Mutate only the caller-owned candidate; never commit a plan."""
         handlers = {
             RepairStrategy.ADD_UNUSED_CANDIDATE: self._repair_empty_day,
             RepairStrategy.ADD_NEARBY_COMPLEMENTARY_POI: self._repair_underfilled_day,
@@ -51,24 +77,12 @@ class RepairController:
         handler = handlers.get(issue.repair_strategy)
         if handler is None:
             return None
-        action = handler(
+        return handler(
             candidate_plan,
             request,
             candidates,
             hotel_candidates,
             issue,
-        )
-        return (
-            RepairProposal(
-                plan=candidate_plan,
-                action=action,
-                mutation_scope=self.mutation_scope(
-                    issue.repair_strategy,
-                    issue.day,
-                ),
-            )
-            if action
-            else None
         )
 
     @staticmethod

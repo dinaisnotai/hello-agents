@@ -524,6 +524,10 @@ def _quality_gate_trace(
             item.model_dump(mode="json")
             for item in plan.repair_history
         ],
+        repair_attempts=[
+            item.model_dump(mode="json")
+            for item in plan.repair_attempts
+        ],
         final_reason=(
             "quality_gate_passed"
             if plan.quality_gate_passed

@@ -10,7 +10,13 @@ from pydantic import BaseModel, Field, field_validator
 from ..constraints.schema import Constraint, ValidationResult
 from ..services.city_name_service import normalize_city_name
 from .observability import PlanningRunTrace
-from .quality import ExperienceEvaluation, ExperienceIssue, RepairIteration
+from .quality import (
+    ExperienceEvaluation,
+    ExperienceIssue,
+    PlanVersionMetadata,
+    RepairAttempt,
+    RepairIteration,
+)
 
 
 AvoidCategory = Literal[
@@ -438,6 +444,10 @@ class TripPlan(BaseModel):
     suggested_alternatives: List[str] = Field(default_factory=list)
     best_effort: bool = False
     repair_history: List[RepairIteration] = Field(default_factory=list)
+    # Kept on the plan so API, checkpoint and legacy callers always agree on
+    # the committed itinerary lineage.  Old serialized plans receive v1.
+    plan_version: PlanVersionMetadata = Field(default_factory=PlanVersionMetadata)
+    repair_attempts: List[RepairAttempt] = Field(default_factory=list)
     observability_trace: Optional[PlanningRunTrace] = None
 
 

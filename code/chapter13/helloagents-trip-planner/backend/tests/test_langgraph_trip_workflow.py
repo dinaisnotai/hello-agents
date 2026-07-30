@@ -126,6 +126,11 @@ class LangGraphTripWorkflowTest(unittest.TestCase):
 
         resumed_plan, resumed_summary = workflow.resume("intent-priority")
         self.assertEqual(resumed_plan.city, request.city)
+        self.assertEqual(resumed_plan.plan_version.version, plan.plan_version.version)
+        self.assertEqual(
+            resumed_plan.plan_version.parent_version,
+            plan.plan_version.parent_version,
+        )
         self.assertTrue(resumed_summary.resumed)
 
     def test_specialist_failure_returns_degraded_plan(self):

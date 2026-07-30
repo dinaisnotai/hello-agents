@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Sequence, Set
+from uuid import uuid4
 import logging
 from ..models.schemas import (
     Attraction,
@@ -31,7 +32,11 @@ from ..models.schemas import (
 from ..models.quality import (
     ExperienceEvaluation,
     ExperienceIssue,
+    CommitDecisionCode,
     PlanChange,
+    PlanVersionMetadata,
+    RepairAttempt,
+    RepairAttemptStatus,
     RepairIteration,
     RepairStrategy,
 )
@@ -56,6 +61,10 @@ from ..services.planning_observability import (
 from ..services.poi_identity_resolver import POIIdentityResolver
 from ..services.itinerary_quality import ItineraryCompletenessGate
 from ..services.repair_controller import RepairController
+from ..services.plan_mutation_sandbox import (
+    CommitDecision,
+    PlanMutationSandbox,
+)
 from ..services.poi_category_service import POI_CATEGORY_LABELS, classify_poi
 from ..services.poi_metadata_service import (
     build_preference_profile,
@@ -1335,6 +1344,184 @@ class MultiAgentTripPlanner:
         available_attractions: Sequence[Attraction],
         *,
         hotel_candidates: Sequence[Hotel] = (),
+        external_evaluator: Callable[[TripPlan], ExperienceEvaluation | None] | None = None,
+        initial_external_evaluation: ExperienceEvaluation | None = None,
+    ) -> TripPlan:
+        """Bounded repair using one sandboxed candidate/commit path."""
+        gate = getattr(self, "completeness_gate", None) or ItineraryCompletenessGate(self._identity())
+        self.completeness_gate = gate
+        controller = getattr(self, "repair_controller", None) or RepairController(self)
+        self.repair_controller = controller
+        current = plan.model_copy(deep=True)
+        self._recalculate(current, request)
+        for day in current.days:
+            if not day.primary_plan:
+                day.primary_plan = deepcopy(day.attractions)
+
+        def evaluate(candidate: TripPlan) -> ExperienceEvaluation:
+            external = external_evaluator(candidate) if external_evaluator else None
+            return gate.merge(gate.evaluate(request, candidate, available_attractions), external)
+
+        evaluation = gate.merge(
+            gate.evaluate(request, current, available_attractions),
+            initial_external_evaluation or (
+                external_evaluator(current) if external_evaluator else None
+            ),
+        )
+        attempted = {item.issue_fingerprint or item.trigger_issue.fingerprint for item in current.repair_history}
+        sandbox = PlanMutationSandbox(
+            recalculate=self._recalculate,
+            evaluate=evaluate,
+            hard_snapshot=lambda candidate: {
+                "hard_pass": self._hard_constraints_pass(candidate),
+                "hard_keys": sorted(self._hard_violation_keys(candidate)),
+            },
+        )
+        for iteration in range(1, self.max_quality_repair_iterations + 1):
+            trigger = self._next_quality_issue(evaluation, attempted)
+            if trigger is None:
+                break
+            attempted.add(trigger.fingerprint)
+            proposal_box = [None]
+            scope = RepairController.mutation_scope(trigger.repair_strategy, trigger.day)
+
+            def mutate(candidate: TripPlan):
+                proposal = controller.propose(
+                    candidate, request, available_attractions,
+                    hotel_candidates, trigger,
+                )
+                proposal_box[0] = proposal
+                return proposal.plan if proposal is not None else False
+
+            def after_recalculate(candidate: TripPlan) -> None:
+                self.reviewer.review(candidate, request)
+
+            def additional_gate(before, candidate, before_eval, after_eval):
+                proposal = proposal_box[0]
+                fields = self._repair_modified_fields(before, candidate)
+                if self._scope_violations(fields, proposal.mutation_scope or scope):
+                    return CommitDecision(CommitDecisionCode.INVALID_CANDIDATE, "MUTATION_SCOPE_VIOLATION")
+                if any(item.severity in {"high", "critical"} and item.fingerprint not in {x.fingerprint for x in before_eval.issues if x.severity in {"high", "critical"}} for item in after_eval.issues):
+                    return CommitDecision(CommitDecisionCode.QUALITY_REGRESSION, "NEW_HIGH_ISSUE")
+                if not trigger.is_blocking:
+                    for old, new in zip(before.days, candidate.days):
+                        if new.daily_travel_minutes > old.daily_travel_minutes + (0 if trigger.repair_strategy == RepairStrategy.ADD_WEATHER_BACKUP else 15):
+                            return CommitDecision(CommitDecisionCode.QUALITY_REGRESSION, "TRANSPORT_REGRESSION")
+                        if new.daily_walking_distance_km > old.daily_walking_distance_km + (0.01 if trigger.repair_strategy == RepairStrategy.ADD_WEATHER_BACKUP else 0.5):
+                            return CommitDecision(CommitDecisionCode.QUALITY_REGRESSION, "WALKING_REGRESSION")
+                return None
+
+            outcome = sandbox.execute(
+                base_plan=current, current_plan=current, request=request,
+                issue=trigger, strategy=trigger.repair_strategy, mutate=mutate,
+                before_evaluation=evaluation,
+                after_recalculate=after_recalculate,
+                additional_gate=additional_gate,
+            )
+            proposal = proposal_box[0]
+            candidate = outcome.candidate or current
+            after_evaluation = outcome.after_evaluation or evaluation
+            fields = self._repair_modified_fields(current, candidate)
+            accepted = outcome.decision.accepted
+            reason = outcome.decision.reason or ("" if accepted else outcome.decision.code.value)
+            if not self._hard_constraints_pass(candidate):
+                reason = "Repair rejected because full hard-constraint validation failed"
+            elif reason == "MUTATION_SCOPE_VIOLATION":
+                reason = "Mutation scope violation"
+            scope_rejected = reason == "Mutation scope violation"
+            record = RepairIteration(
+                iteration=iteration, trigger_issue=trigger, issue_fingerprint=trigger.fingerprint,
+                selected_action=(proposal.action if proposal else "no_legal_repair_available"),
+                action_result=(
+                    "accepted; plan revalidated" if accepted else
+                    "rolled_back_before_recalculation" if scope_rejected else
+                    "rejected transactionally; previous best plan retained"
+                ),
+                accepted=accepted, rejection_reason=reason,
+                changes=self._quality_plan_changes(current, candidate),
+                constraint_pass_before=self._hard_constraints_pass(current),
+                constraint_pass_after=self._hard_constraints_pass(candidate) if outcome.candidate else self._hard_constraints_pass(current),
+                quality_score_before=evaluation.overall_score,
+                quality_score_after=after_evaluation.overall_score,
+                issues_before=evaluation.issues, issues_after=after_evaluation.issues,
+                mutation_scope=list(proposal.mutation_scope if proposal else scope),
+                actual_modified_fields=fields,
+                itinerary_before=self._itinerary_snapshot(current),
+                itinerary_after=self._itinerary_snapshot(candidate),
+                constraint_delta={
+                    "added": sorted(self._hard_violation_keys(candidate) - self._hard_violation_keys(current)),
+                    "removed": sorted(self._hard_violation_keys(current) - self._hard_violation_keys(candidate)),
+                },
+                issue_delta=self._issue_delta(evaluation, after_evaluation),
+                rollback_reason=reason if not accepted else "",
+            )
+            if accepted:
+                candidate.repair_history = [*current.repair_history, record]
+                candidate.repair_attempts = [*current.repair_attempts, outcome.attempt]
+                for day in candidate.days:
+                    if f"days[{day.day_index}].attractions" in fields:
+                        day.primary_plan = deepcopy(day.attractions)
+                current, evaluation = candidate, after_evaluation
+            else:
+                current.repair_history.append(record)
+                current.repair_attempts.append(outcome.attempt)
+                if proposal is None:
+                    continue
+                break
+        return self._finalize_quality_loop(current, request, available_attractions, evaluation, external_evaluator)
+
+    def _finalize_quality_loop(
+        self,
+        current: TripPlan,
+        request: TripRequest,
+        available_attractions: Sequence[Attraction],
+        evaluation: ExperienceEvaluation,
+        external_evaluator: Callable[[TripPlan], ExperienceEvaluation | None] | None,
+    ) -> TripPlan:
+        """Apply final best-effort/degraded semantics after sandbox attempts."""
+        gate = self.completeness_gate
+        final_evaluation = gate.merge(
+            gate.evaluate(request, current, available_attractions),
+            external_evaluator(current) if external_evaluator else None,
+        )
+        hard_pass = self._hard_constraints_pass(current)
+        current.quality_evaluation = final_evaluation
+        unresolved = []
+        for issue in final_evaluation.issues:
+            if issue.resolution_status in {"resolved", "mitigated"}:
+                continue
+            issue.resolution_status = "unresolved_blocking" if issue.is_blocking else "unresolved_non_blocking"
+            unresolved.append(issue)
+        blocking = [item for item in unresolved if item.is_blocking]
+        warnings = [item for item in unresolved if not item.is_blocking]
+        current.quality_gate_passed = hard_pass and not blocking
+        current.unresolved_quality_issues = unresolved
+        current.unresolved_blocking_issues = blocking
+        current.unresolved_non_blocking_issues = warnings
+        current.best_effort = bool(unresolved)
+        current.suggested_alternatives = sorted(set([
+            *current.suggested_alternatives,
+            *[day.weather_warning for day in current.days if day.weather_warning],
+            *[f"可选改进：{item.evidence}" for item in warnings],
+            *[f"需处理后执行：{item.evidence}" for item in blocking],
+        ]))
+        if current.quality_gate_passed:
+            current.failure_reason = None if hard_pass else current.failure_reason
+            current.degraded_reason = None
+            current.risk_warnings = sorted(set([*current.risk_warnings, *[item.evidence for item in warnings]]))
+        else:
+            current.failure_reason = current.failure_reason or "Quality gate unresolved after bounded repair"
+            current.degraded_reason = current.failure_reason
+        curate_user_warnings(current)
+        return current
+
+    def _run_quality_loop_legacy(
+        self,
+        plan: TripPlan,
+        request: TripRequest,
+        available_attractions: Sequence[Attraction],
+        *,
+        hotel_candidates: Sequence[Hotel] = (),
         external_evaluator: Callable[
             [TripPlan], ExperienceEvaluation | None
         ]
@@ -1678,11 +1865,54 @@ class MultiAgentTripPlanner:
                 ),
                 rollback_reason=rejection_reason if not accepted else "",
             )
+            # The handler only touched ``candidate`` (RepairController deep
+            # copies its input).  Record the same candidate transaction in a
+            # versioned envelope before swapping the formal current plan.
+            attempt = RepairAttempt(
+                attempt_id=uuid4().hex,
+                base_plan_version=current.plan_version.version,
+                issue_fingerprint=trigger.fingerprint,
+                issue_type=trigger.issue_type,
+                repair_strategy=trigger.repair_strategy,
+                status=(
+                    RepairAttemptStatus.COMMITTED
+                    if accepted
+                    else RepairAttemptStatus.ROLLED_BACK
+                ),
+                validation_before={
+                    "hard_pass": self._hard_constraints_pass(before),
+                    "hard_keys": sorted(self._hard_violation_keys(before)),
+                },
+                validation_after={
+                    "hard_pass": hard_pass_after,
+                    "hard_keys": sorted(after_hard),
+                },
+                quality_before={"score": evaluation.overall_score},
+                quality_after={"score": after_evaluation.overall_score},
+                quality_delta=round(
+                    after_evaluation.overall_score - evaluation.overall_score, 4
+                ),
+                plan_diff=PlanMutationSandbox.diff(before, candidate),
+                rollback_reason=rejection_reason if not accepted else "",
+                committed_plan_version=(
+                    current.plan_version.version + 1 if accepted else None
+                ),
+            )
             if accepted:
                 for day in candidate.days:
                     if f"days[{day.day_index}].attractions" in proposal_fields:
                         day.primary_plan = deepcopy(day.attractions)
                 candidate.repair_history = [*current.repair_history, record]
+                candidate.repair_attempts = [*current.repair_attempts, attempt]
+                candidate.plan_version = PlanVersionMetadata(
+                    version=current.plan_version.version + 1,
+                    parent_version=current.plan_version.version,
+                    mutation_source="repair_controller",
+                    mutation_action=trigger.repair_strategy.value,
+                    mutation_reason=trigger.issue_type,
+                    attempt_id=attempt.attempt_id,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
                 candidate.planning_trace.append(
                     PlanningTraceItem(
                         iteration=iteration,
@@ -1697,6 +1927,7 @@ class MultiAgentTripPlanner:
                 evaluation = after_evaluation
             else:
                 current.repair_history.append(record)
+                current.repair_attempts.append(attempt)
                 # The fingerprint prevents this failed action from being retried.
                 break
 
@@ -2182,7 +2413,19 @@ class MultiAgentTripPlanner:
                 attraction.hours_source = "category_estimate"
 
     def replan(self, replan_request: ReplanRequest) -> TripPlan:
-        plan = replan_request.plan
+        # Replanning must not mutate a plan held by a conversation/checkpoint.
+        # It starts a new formal lineage version before optional repairs create
+        # further versions through the sandbox gate.
+        source_plan = replan_request.plan
+        plan = source_plan.model_copy(deep=True)
+        plan.plan_version = PlanVersionMetadata(
+            version=source_plan.plan_version.version + 1,
+            parent_version=source_plan.plan_version.version,
+            mutation_source="replan",
+            mutation_action="replan",
+            mutation_reason=replan_request.notes or "user_replan",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
         request = replan_request.request or TripRequest(
             city=plan.city,
             start_date=plan.start_date,

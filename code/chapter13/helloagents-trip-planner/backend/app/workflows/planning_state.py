@@ -92,6 +92,10 @@ class PlanningState(TypedDict, total=False):
     llm_draft: dict[str, Any]
     deterministic_plan: dict[str, Any]
     final_plan: dict[str, Any]
+    current_plan_version: int
+    plan_version_history: list[dict[str, Any]]
+    active_repair_attempt: dict[str, Any]
+    repair_history_summary: list[dict[str, Any]]
     repair_count: int
     errors: Annotated[list[dict[str, Any]], operator.add]
     degraded_services: Annotated[list[str], operator.add]

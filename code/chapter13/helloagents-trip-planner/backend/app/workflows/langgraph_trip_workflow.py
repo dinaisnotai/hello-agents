@@ -21,11 +21,13 @@ from ..agents.multi_agent_orchestrator import MultiAgentOrchestrator, get_multi_
 from ..config import settings
 from ..models.agent_outputs import AttractionSearchResult, HotelSearchResult, WeatherQueryResult
 from ..models.schemas import Attraction, EvidenceSource, Hotel, TripPlan, TripRequest, WorkflowExecutionSummary
+from ..models.quality import ExperienceEvaluation, ExperienceIssue, RepairStrategy
 from ..constraints.extractor import ConstraintExtractor
 from ..constraints.schema import ConstraintSet
 from ..services.place_name_service import normalize_place_name
 from ..services.accommodation_selector import AccommodationSelector
 from ..services.user_warning_service import curate_user_warnings
+from ..services.plan_mutation_sandbox import PlanMutationSandbox
 from ..services.planning_observability import (
     build_planning_trace,
     emit_planning_trace,
@@ -121,7 +123,14 @@ class LangGraphTripWorkflow:
         started_at = perf_counter()
         logger.info("[langgraph:%s] START trip workflow", run_id)
         state = self.graph.invoke(
-            {"raw_request": request.model_dump(mode="json"), "repair_count": 0, "run_id": run_id},
+            {
+                "raw_request": request.model_dump(mode="json"),
+                "repair_count": 0,
+                "run_id": run_id,
+                "current_plan_version": 1,
+                "plan_version_history": [],
+                "repair_history_summary": [],
+            },
             config=config,
         )
         plan, summary = self._result_from_state(state, run_id, resumed=False)
@@ -356,6 +365,10 @@ class LangGraphTripWorkflow:
             logger.info(f"end_time-start_time={end_time-start_time:.2f}")
             return {
                 "deterministic_plan": plan.model_dump(mode="json"),
+                "current_plan_version": plan.plan_version.version,
+                "plan_version_history": [
+                    plan.plan_version.model_dump(mode="json")
+                ],
                 "planning_candidates": [
                     item.model_dump(mode="json")
                     for item in planning_candidates
@@ -408,11 +421,86 @@ class LangGraphTripWorkflow:
         ] or AttractionSearchResult.model_validate(
             state.get("attraction_result", {})
         ).attractions
-        action = self.orchestrator.plan_builder._apply_next_repair(plan, request, attractions)
-        if action is not None:
-            self.orchestrator.plan_builder._recalculate(plan, request)
-        self._log(state, "bounded_repair", action[0] if action else "no_action", f"attempt={attempt}")
-        return {"repair_count": attempt, "deterministic_plan": plan.model_dump(mode="json"), "trace": [self._trace("bounded_repair", action[0] if action else "no_action", action[1] if action else "")]}
+        builder = self.orchestrator.plan_builder
+        issue = ExperienceIssue(
+            issue_type="constraint_failure",
+            severity="high",
+            evidence="Deterministic constraint validation requires repair",
+            repair_strategy=RepairStrategy.RUN_CONSTRAINT_REPAIR,
+        )
+
+        def hard_snapshot(candidate: TripPlan) -> dict[str, Any]:
+            hard_pass_method = getattr(builder, "_hard_constraints_pass", None)
+            hard_keys_method = getattr(builder, "_hard_violation_keys", None)
+            hard_pass = (
+                hard_pass_method(candidate)
+                if hard_pass_method is not None
+                else candidate.validation_result.valid
+                and candidate.constraint_report.passed
+            )
+            return {
+                "hard_pass": hard_pass,
+                "hard_keys": (
+                    sorted(hard_keys_method(candidate))
+                    if hard_keys_method is not None
+                    else ([] if hard_pass else ["constraint_report"])
+                ),
+            }
+
+        before_hard = hard_snapshot(plan)
+
+        def evaluate(candidate: TripPlan) -> ExperienceEvaluation:
+            snapshot = hard_snapshot(candidate)
+            return ExperienceEvaluation(
+                **{"pass": snapshot["hard_pass"]},
+                overall_score=10 if snapshot["hard_pass"] else 0,
+                issues=[] if snapshot["hard_pass"] else [issue],
+            )
+
+        action_holder: list[tuple[str, str] | None] = [None]
+
+        def mutate(candidate: TripPlan) -> bool:
+            action_holder[0] = builder._apply_next_repair(candidate, request, attractions)
+            return action_holder[0] is not None
+
+        sandbox = PlanMutationSandbox(
+            recalculate=builder._recalculate,
+            evaluate=evaluate,
+            hard_snapshot=hard_snapshot,
+        )
+        outcome = sandbox.execute(
+            base_plan=plan,
+            current_plan=plan,
+            request=request,
+            issue=issue,
+            strategy=RepairStrategy.RUN_CONSTRAINT_REPAIR,
+            mutate=mutate,
+        )
+        committed = outcome.plan
+        committed.repair_attempts = [*committed.repair_attempts, outcome.attempt]
+        version_history = list(state.get("plan_version_history", []))
+        version_payload = committed.plan_version.model_dump(mode="json")
+        if not version_history or version_history[-1].get("version") != version_payload["version"]:
+            version_history.append(version_payload)
+        action = action_holder[0]
+        detail = (
+            action[1] if action else outcome.decision.code.value
+        )
+        self._log(state, "bounded_repair", action[0] if action else outcome.decision.code.value, f"attempt={attempt}; {detail}")
+        return {
+            "repair_count": attempt,
+            "current_plan_version": committed.plan_version.version,
+            "plan_version_history": version_history,
+            "active_repair_attempt": outcome.attempt.model_dump(mode="json"),
+            "repair_history_summary": [{
+                "attempt_id": outcome.attempt.attempt_id,
+                "status": outcome.attempt.status.value,
+                "base_plan_version": outcome.attempt.base_plan_version,
+                "decision": outcome.decision.code.value,
+            }],
+            "deterministic_plan": committed.model_dump(mode="json"),
+            "trace": [self._trace("bounded_repair", action[0] if action else outcome.decision.code.value, detail)],
+        }
 
     def soft_review(self, state: PlanningState) -> dict[str, Any]:
         plan = TripPlan.model_validate(state["deterministic_plan"])
