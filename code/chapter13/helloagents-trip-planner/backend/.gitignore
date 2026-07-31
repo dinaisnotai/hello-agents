@@ -44,6 +44,8 @@ ENV/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/*.jsonl
+eval_report_governance_*.json
 
 # 测试
 !tests/

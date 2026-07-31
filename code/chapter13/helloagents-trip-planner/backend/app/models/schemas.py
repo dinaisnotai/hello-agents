@@ -17,6 +17,7 @@ from .quality import (
     RepairAttempt,
     RepairIteration,
 )
+from .context_governance import ContextTrace
 
 
 AvoidCategory = Literal[
@@ -448,6 +449,7 @@ class TripPlan(BaseModel):
     # the committed itinerary lineage.  Old serialized plans receive v1.
     plan_version: PlanVersionMetadata = Field(default_factory=PlanVersionMetadata)
     repair_attempts: List[RepairAttempt] = Field(default_factory=list)
+    context_traces: List[ContextTrace] = Field(default_factory=list)
     observability_trace: Optional[PlanningRunTrace] = None
 
 

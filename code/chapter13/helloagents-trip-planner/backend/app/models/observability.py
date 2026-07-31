@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 from .quality import QualityGateTrace
+from .context_governance import ContextTrace
 
 
 class UserRequirementTrace(BaseModel):
@@ -90,3 +91,4 @@ class PlanningRunTrace(BaseModel):
     portfolio_metrics: PortfolioMetricsTrace = Field(
         default_factory=PortfolioMetricsTrace
     )
+    context_traces: list[ContextTrace] = Field(default_factory=list)

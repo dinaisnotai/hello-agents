@@ -467,6 +467,9 @@ class LangGraphTripWorkflow:
             recalculate=builder._recalculate,
             evaluate=evaluate,
             hard_snapshot=hard_snapshot,
+            pipeline_mode="langgraph",
+            evaluation_mode=("live" if settings.amap_api_key else "offline"),
+            run_id=state.get("run_id", ""),
         )
         outcome = sandbox.execute(
             base_plan=plan,

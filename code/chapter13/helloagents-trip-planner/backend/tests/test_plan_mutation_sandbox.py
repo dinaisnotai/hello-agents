@@ -1,6 +1,8 @@
 """Regression tests for isolated and versioned repair mutations."""
 
 import unittest
+import tempfile
+from pathlib import Path
 
 from app.models.quality import (
     ExperienceEvaluation,
@@ -14,6 +16,7 @@ from app.services.plan_mutation_sandbox import (
     CommitDecisionCode,
     PlanMutationSandbox,
 )
+from app.services.repair_skill_metrics import RepairSkillExecutionStore
 
 
 def request():
@@ -50,7 +53,7 @@ class PlanMutationSandboxTest(unittest.TestCase):
             repair_strategy=RepairStrategy.ADD_NEARBY_COMPLEMENTARY_POI,
         )
 
-    def sandbox(self):
+    def sandbox(self, store=None):
         def recalculate(candidate, _request):
             candidate.days[0].daily_walking_distance_km = len(candidate.days[0].attractions)
             candidate.days[0].daily_travel_minutes = 10 * len(candidate.days[0].attractions)
@@ -67,6 +70,7 @@ class PlanMutationSandboxTest(unittest.TestCase):
             )
         return PlanMutationSandbox(
             recalculate=recalculate, evaluate=evaluate, hard_snapshot=hard_snapshot,
+            execution_store=store,
         )
 
     def test_deep_copy_and_successful_commit_creates_v2(self):
@@ -123,3 +127,18 @@ class PlanMutationSandboxTest(unittest.TestCase):
         self.assertEqual(failed.decision.code, CommitDecisionCode.MUTATION_FAILED)
         self.assertEqual(failed.plan.plan_version.version, 2)
         self.assertEqual(failed.attempt.status, RepairAttemptStatus.FAILED)
+
+    def test_execution_event_distinguishes_mutation_and_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RepairSkillExecutionStore(Path(directory) / "events.jsonl")
+            base = plan()
+            result = self.sandbox(store).execute(
+                base_plan=base, current_plan=base, request=request(), issue=self.issue,
+                strategy=self.issue.repair_strategy,
+                mutate=lambda candidate: candidate.days[0].attractions.append(poi("B", "b")) or True,
+            )
+            event = store.load()[0]
+            self.assertTrue(event.selected)
+            self.assertTrue(event.mutation_succeeded)
+            self.assertTrue(event.committed)
+            self.assertEqual(event.attempt_id, result.attempt.attempt_id)

@@ -19,10 +19,13 @@ from ..models.agent_outputs import (
 )
 from ..models.schemas import EvidenceSource, Hotel, TripPlan, TripRequest
 from ..models.quality import ExperienceEvaluation
+from ..models.context_governance import ContextRole
+from ..config import settings
 from ..services.accommodation_selector import AccommodationSelector
 from ..services.itinerary_quality import ItineraryCompletenessGate
 from ..services.planning_observability import refresh_planning_trace
 from ..services.user_warning_service import curate_user_warnings
+from ..services.context_governance import RoleContextBuilder
 from .agent_utils import parse_agent_result, run_stateless_agent
 from .prompts import PLANNER_PROMPT
 from .trip_planner_agent import MultiAgentTripPlanner
@@ -43,6 +46,7 @@ class PlannerAgent:
         self._run_lock = Lock()
         self.agent: Optional[SimpleAgent] = None
         self.last_warning = ""
+        self.context_builder = RoleContextBuilder()
         if llm is not None:
             self.agent = SimpleAgent(
                 name="PlannerAgent",
@@ -221,6 +225,25 @@ class PlannerAgent:
             # The deterministic plan is already complete. LLM review failure
             # must not turn a valid itinerary into an API failure.
             self.last_warning = f"PlannerAgent 软审查失败：{exc}"
+        if settings.enable_context_governance:
+            # Final output is deterministic today; retain its governed view so
+            # an optional future explainer cannot receive L2 internals.
+            final_context = self.context_builder.build(
+                role=ContextRole.FINAL_EXPLAINER,
+                request=request,
+                plan=plan,
+                evidence=evidence,
+                weather_risks=weather_result.risk_summary,
+                run_id=(plan.observability_trace.run_id if plan.observability_trace else ""),
+            )
+            plan.context_traces.append(
+                self.context_builder.trace(
+                    final_context,
+                    node_name="final_explainer",
+                    run_id=(plan.observability_trace.run_id if plan.observability_trace else ""),
+                    model="deterministic",
+                )
+            )
         curate_user_warnings(plan)
         refresh_planning_trace(plan)
         return plan
@@ -279,7 +302,86 @@ class PlannerAgent:
         *,
         available_attractions,
     ) -> dict:
-        """Build the complete, auditable Experience Evaluator input."""
+        """Build role-governed Experience Evaluator input from a single view."""
+
+        if settings.enable_context_governance:
+            return self._build_governed_review_payload(
+                request, plan, weather_result, evidence,
+                available_attractions=available_attractions,
+            )
+
+        """Legacy payload retained only for governance A/B comparison."""
+        assigned = {
+            item.visit_key or item.poi_id or item.name
+            for day in plan.days
+            for item in day.attractions
+        }
+        remaining = [item for item in available_attractions if (item.visit_key or item.poi_id or item.name) not in assigned]
+        gate = getattr(self.plan_builder, "completeness_gate", ItineraryCompletenessGate())
+        return {
+            "request": request.model_dump(mode="json"),
+            "plan": plan.model_dump(mode="json", exclude={"observability_trace"}),
+            "hotels": [day.hotel.model_dump(mode="json") for day in plan.days if day.hotel is not None],
+            "observability": {}, "weather_risks": weather_result.risk_summary,
+            "review_context": {"previous_issues": [], "previous_attempts": [], "available_candidate_categories": sorted({item.category or "general" for item in remaining}), "indoor_candidates_count": sum(gate._is_indoor(item) for item in remaining), "remaining_candidate_count": len(remaining)},
+            "evidence": [{"title": item.title, "source": item.source, "snippet": item.snippet} for item in evidence],
+        }
+
+    def _build_governed_review_payload(
+        self,
+        request: TripRequest,
+        plan: TripPlan,
+        weather_result: WeatherQueryResult,
+        evidence: List[EvidenceSource],
+        *,
+        available_attractions,
+    ) -> dict:
+        governed = self.context_builder.build(
+            role=ContextRole.EXPERIENCE_EVALUATOR,
+            request=request,
+            plan=plan,
+            candidates=available_attractions,
+            evidence=evidence,
+            weather_risks=weather_result.risk_summary,
+            run_id=(plan.observability_trace.run_id if plan.observability_trace else ""),
+        )
+        plan.context_traces.append(
+            self.context_builder.trace(
+                governed,
+                node_name="experience_evaluator",
+                run_id=(plan.observability_trace.run_id if plan.observability_trace else ""),
+                model=getattr(getattr(self.agent, "llm", None), "model", ""),
+            )
+        )
+        # The compatibility envelope preserves the established prompt field
+        # names, while every value originates in the governed context view.
+        payload = governed.payload
+        return {
+            "request": {**payload["request"], "hard_constraints": payload["hard_constraints"]},
+            "plan": {
+                "days": payload["plan_summary"]["days"],
+                "constraint_report": payload["validation"],
+                "budget": {"total": payload["plan_summary"]["budget_total"]},
+                "plan_version": payload["plan_summary"]["version"],
+            },
+            "hotels": [
+                {"name": day.hotel.name, "type": day.hotel.type}
+                for day in plan.days if day.hotel is not None
+            ],
+            "observability": {
+                "candidate_pois": payload.get("candidates", []),
+                "validation_result": payload["validation"],
+            },
+            "weather_risks": payload.get("weather", []),
+            "review_context": {
+                "previous_attempts": payload.get("repair_history", []),
+                "available_candidate_categories": sorted({item.category or "general" for item in available_attractions}),
+                "remaining_candidate_count": len(available_attractions),
+                "instruction": "Do not repeat a failed issue fingerprint and repair strategy without new evidence.",
+            },
+            "evidence": payload.get("evidence", []),
+            "context_governance": governed.model_dump(mode="json", exclude={"payload"}),
+        }
 
         assigned = {
             item.visit_key or item.poi_id or item.name

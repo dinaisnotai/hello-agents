@@ -9,6 +9,7 @@ from typing import Any, Sequence
 from ..models.quality import ExperienceIssue, RepairStrategy
 from ..models.schemas import Attraction, Hotel, TripPlan, TripRequest
 from .attraction_scorer import AttractionScorer
+from .repair_skill_registry import get_repair_skill_registry
 
 
 @dataclass
@@ -23,6 +24,7 @@ class RepairController:
 
     def __init__(self, planner: Any):
         self.planner = planner
+        self.skill_registry = get_repair_skill_registry()
 
     def propose(
         self,
@@ -59,6 +61,12 @@ class RepairController:
         issue: ExperienceIssue,
     ) -> str | None:
         """Mutate only the caller-owned candidate; never commit a plan."""
+        if not self.skill_registry.is_applicable(
+            issue.repair_strategy,
+            issue.issue_type,
+            f"days[{issue.day - 1}]" if issue.day else None,
+        ):
+            return None
         handlers = {
             RepairStrategy.ADD_UNUSED_CANDIDATE: self._repair_empty_day,
             RepairStrategy.ADD_NEARBY_COMPLEMENTARY_POI: self._repair_underfilled_day,

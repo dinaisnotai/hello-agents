@@ -7,9 +7,10 @@ can never mutate the formal plan passed to :meth:`execute`.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
+from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Sequence
 from uuid import uuid4
@@ -27,6 +28,9 @@ from ..models.quality import (
     RepairStrategy,
 )
 from ..models.schemas import Attraction, Hotel, TripPlan, TripRequest
+from ..models.repair_skills import RepairSkillExecution
+from .repair_skill_metrics import RepairSkillExecutionStore
+from .repair_skill_registry import get_repair_skill_registry
 
 
 @dataclass
@@ -115,10 +119,20 @@ class PlanMutationSandbox:
         recalculate: Callable[[TripPlan, TripRequest], None],
         evaluate: Callable[[TripPlan], ExperienceEvaluation],
         hard_snapshot: Callable[[TripPlan], dict[str, Any]],
+        execution_store: RepairSkillExecutionStore | None = None,
+        pipeline_mode: str = "deterministic",
+        evaluation_mode: str = "offline",
+        run_id: str = "",
     ) -> None:
         self.recalculate = recalculate
         self.evaluate = evaluate
         self.hard_snapshot = hard_snapshot
+        self.execution_store = execution_store or RepairSkillExecutionStore(
+            Path(os.getenv("REPAIR_SKILL_ARTIFACT_PATH", "data/repair_skill_executions.jsonl"))
+        )
+        self.pipeline_mode = pipeline_mode
+        self.evaluation_mode = evaluation_mode
+        self.run_id = run_id
 
     def execute(
         self,
@@ -150,6 +164,7 @@ class PlanMutationSandbox:
         attempt.validation_before = before_validation
         attempt.quality_before = self._quality_snapshot(before_quality)
         started = perf_counter()
+        decision: CommitDecision | None = None
         candidate: TripPlan | None = None
         try:
             # model_copy(deep=True) preserves Pydantic types and ensures nested
@@ -162,9 +177,10 @@ class PlanMutationSandbox:
             if result is False or result is None:
                 attempt.status = RepairAttemptStatus.ROLLED_BACK
                 attempt.rollback_reason = CommitDecisionCode.MUTATION_FAILED.value
+                decision = CommitDecision(CommitDecisionCode.MUTATION_FAILED)
                 return SandboxExecutionResult(
                     current_plan, attempt,
-                    CommitDecision(CommitDecisionCode.MUTATION_FAILED), candidate,
+                    decision, candidate,
                 )
             attempt.status = RepairAttemptStatus.APPLIED
             self.recalculate(candidate, request)
@@ -215,14 +231,65 @@ class PlanMutationSandbox:
             attempt.status = RepairAttemptStatus.FAILED
             attempt.error = f"{type(exc).__name__}: {exc}"
             attempt.rollback_reason = CommitDecisionCode.INVALID_CANDIDATE.value
-            return SandboxExecutionResult(current_plan, attempt, CommitDecision(CommitDecisionCode.INVALID_CANDIDATE, attempt.error), candidate)
+            decision = CommitDecision(CommitDecisionCode.INVALID_CANDIDATE, attempt.error)
+            return SandboxExecutionResult(current_plan, attempt, decision, candidate)
         except Exception as exc:  # handlers are untrusted from a state-safety view
             attempt.status = RepairAttemptStatus.FAILED
             attempt.error = f"{type(exc).__name__}: {exc}"
             attempt.rollback_reason = CommitDecisionCode.MUTATION_FAILED.value
-            return SandboxExecutionResult(current_plan, attempt, CommitDecision(CommitDecisionCode.MUTATION_FAILED, attempt.error), candidate)
+            decision = CommitDecision(CommitDecisionCode.MUTATION_FAILED, attempt.error)
+            return SandboxExecutionResult(current_plan, attempt, decision, candidate)
         finally:
             attempt.quality_after.setdefault("elapsed_ms", round((perf_counter() - started) * 1000, 2))
+            self._record_execution(attempt, issue, strategy, decision)
+
+    def _record_execution(
+        self,
+        attempt: RepairAttempt,
+        issue: ExperienceIssue,
+        strategy: RepairStrategy,
+        decision: CommitDecision | None,
+    ) -> None:
+        """Persist a compact event; never stores a plan or prompt payload."""
+        if self.execution_store is None:
+            return
+        skill = get_repair_skill_registry().get(strategy)
+        if skill is None:
+            return
+        before = attempt.validation_before
+        after = attempt.validation_after
+        execution = RepairSkillExecution(
+            skill_id=skill.skill_id,
+            skill_version=skill.version,
+            run_id=self.run_id,
+            attempt_id=attempt.attempt_id,
+            base_plan_version=attempt.base_plan_version,
+            issue_type=issue.issue_type,
+            issue_severity=issue.severity,
+            issue_fingerprint=issue.fingerprint,
+            target_scope=[f"days[{issue.day - 1}]" if issue.day else "days[*]"],
+            mutation_succeeded=attempt.status in {RepairAttemptStatus.APPLIED, RepairAttemptStatus.VALIDATED, RepairAttemptStatus.COMMITTED},
+            committed=attempt.status == RepairAttemptStatus.COMMITTED,
+            quality_improved=(attempt.quality_delta > 0 if attempt.quality_after else None),
+            commit_decision=(decision.code if decision else None),
+            rollback_reason=attempt.rollback_reason,
+            quality_before=attempt.quality_before.get("score"),
+            quality_after=attempt.quality_after.get("score"),
+            quality_delta=attempt.quality_delta if attempt.quality_after else None,
+            hard_violations_before=len(before.get("hard_keys", [])),
+            hard_violations_after=len(after.get("hard_keys", [])),
+            warning_count_before=attempt.quality_before.get("warning_count", 0),
+            warning_count_after=attempt.quality_after.get("warning_count", 0),
+            execution_time_ms=attempt.quality_after.get("elapsed_ms", 0),
+            pipeline_mode=self.pipeline_mode,
+            evaluation_mode=self.evaluation_mode,
+            error=attempt.error,
+        )
+        try:
+            self.execution_store.append(execution)
+        except OSError:
+            # Artifact persistence must not alter repair safety semantics.
+            return
 
     @staticmethod
     def _ensure_version(plan: TripPlan) -> None:
@@ -234,6 +301,10 @@ class PlanMutationSandbox:
         return {
             "score": evaluation.overall_score,
             "issue_fingerprints": [item.fingerprint for item in evaluation.issues],
+            "warning_count": sum(
+                item.severity in {"warning", "info"}
+                for item in evaluation.issues
+            ),
         }
 
     @staticmethod

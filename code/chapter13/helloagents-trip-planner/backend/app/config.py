@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     workflow_mode: str = "legacy"
     langgraph_checkpoint_db_path: str = ""
     enable_llm_intent_parsing: bool = False
+    enable_context_governance: bool = True
 
     # 日志配置
     log_level: str = "INFO"

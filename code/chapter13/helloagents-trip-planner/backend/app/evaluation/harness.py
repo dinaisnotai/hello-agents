@@ -41,6 +41,18 @@ class EvaluationHarness:
             latency = perf_counter() - started
             result = evaluate_plan(case, plan)
             result.latency_seconds = round(latency, 4)
+            context_traces = plan.context_traces
+            if context_traces:
+                result.metrics.update(
+                    {
+                        "context_governance_enabled": True,
+                        "estimated_input_tokens": sum(item.estimated_tokens_after for item in context_traces),
+                        "context_section_count": sum(len(item.included_sections) for item in context_traces),
+                        "truncated_section_count": sum(len(item.truncated_sections) for item in context_traces),
+                    }
+                )
+            else:
+                result.metrics["context_governance_enabled"] = False
             results.append(result)
         passed = sum(item.passed for item in results)
         return EvaluationReport(

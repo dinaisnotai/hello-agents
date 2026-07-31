@@ -77,6 +77,7 @@ def build_planning_trace(
             candidates,
             request,
         ),
+        context_traces=list(plan.context_traces),
     )
     return trace
 
@@ -127,6 +128,7 @@ def refresh_planning_trace(
         ],
         None,
     )
+    trace.context_traces = list(plan.context_traces)
     return trace
 
 

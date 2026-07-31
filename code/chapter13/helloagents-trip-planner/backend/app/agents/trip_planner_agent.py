@@ -1376,6 +1376,8 @@ class MultiAgentTripPlanner:
                 "hard_pass": self._hard_constraints_pass(candidate),
                 "hard_keys": sorted(self._hard_violation_keys(candidate)),
             },
+            pipeline_mode="deterministic",
+            run_id=(current.observability_trace.run_id if current.observability_trace else ""),
         )
         for iteration in range(1, self.max_quality_repair_iterations + 1):
             trigger = self._next_quality_issue(evaluation, attempted)
