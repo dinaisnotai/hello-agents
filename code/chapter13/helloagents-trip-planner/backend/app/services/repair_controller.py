@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from ..models.quality import ExperienceIssue, RepairStrategy
 from ..models.schemas import Attraction, Hotel, TripPlan, TripRequest
+from ..config import settings
 from .attraction_scorer import AttractionScorer
 from .repair_skill_registry import get_repair_skill_registry
 
@@ -159,10 +160,12 @@ class RepairController:
             item
             for item in self._unused(plan, candidates)
             if self.planner.completeness_gate._is_indoor(item)
+            and self._knowledge_candidate_allowed(item, request)
             and (item.visit_key or item.poi_id or item.name) not in used
         ]
         indoor.sort(
             key=lambda item: (
+                -self._knowledge_weather_score(item, request, plan),
                 -item.score,
                 -item.popularity,
                 item.name,
@@ -526,6 +529,7 @@ class RepairController:
         available.sort(
             key=lambda item: (
                 AttractionScorer.category_bucket(item) in current_categories,
+                -self._knowledge_fill_score(item, target, request),
                 self.planner.spatial_planner._next_poi_rank(
                     target.attractions,
                     item,
@@ -556,6 +560,41 @@ class RepairController:
                 ):
                     break
         return added
+
+    def _knowledge_fill_score(self, item: Attraction, target, request: TripRequest) -> float:
+        if not settings.enable_travel_knowledge:
+            return 0.0
+        delta, _ = self.planner.travel_knowledge.score_delta(
+            item,
+            request,
+            weather_risks=[target.weather_warning or ""],
+            available_minutes=self.planner._daily_time_budget(request),
+        )
+        return delta
+
+    def _knowledge_weather_score(self, item: Attraction, request: TripRequest, plan: TripPlan) -> float:
+        if not settings.enable_travel_knowledge:
+            return 0.0
+        risks = [
+            f"{weather.day_weather} {weather.night_weather}"
+            for weather in plan.weather_info
+        ]
+        delta, _ = self.planner.travel_knowledge.score_delta(
+            item,
+            request,
+            weather_risks=risks,
+            available_minutes=self.planner._daily_time_budget(request),
+        )
+        knowledge = self.planner.travel_knowledge.resolve_poi(request.city, item)
+        environment_bonus = 2.0 if self.planner.travel_knowledge.is_indoor(knowledge) else 0.0
+        return delta + environment_bonus
+
+    def _knowledge_candidate_allowed(self, item: Attraction, request: TripRequest) -> bool:
+        """Reject only known-low-confidence candidates; preserve legacy fallback."""
+        if not settings.enable_travel_knowledge:
+            return True
+        knowledge = self.planner.travel_knowledge.resolve_poi(request.city, item)
+        return knowledge is None or knowledge.confidence >= 0.6
 
     def _unused(
         self,

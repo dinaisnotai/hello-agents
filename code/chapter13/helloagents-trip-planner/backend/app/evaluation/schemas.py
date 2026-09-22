@@ -41,6 +41,12 @@ class QualityExpectations(BaseModel):
         default=None, ge=0, le=100
     )
     require_selection_explanations: bool = False
+    elderly_friendliness: bool = False
+    weather_suitability: bool = False
+    traveler_fit: bool = False
+    planning_zone_coherence: bool = False
+    pair_compatibility: bool = False
+    min_experience_score: float | None = Field(default=None, ge=0, le=10)
 
 
 class EvaluationCase(BaseModel):
@@ -84,3 +90,12 @@ class EvaluationReport(BaseModel):
     passed_cases: int
     pass_rate: float
     results: list[EvaluationResult] = Field(default_factory=list)
+
+
+class ABEvaluationReport(BaseModel):
+    """Paired baseline/enabled report used before feature rollout."""
+
+    baseline: EvaluationReport
+    enabled: EvaluationReport
+    metric_deltas: dict[str, float] = Field(default_factory=dict)
+    hard_regression: bool = False

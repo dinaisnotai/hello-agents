@@ -51,6 +51,7 @@ eval_report_governance_*.json
 !tests/
 !tests/test_*.py
 .pytest_cache/
+.cache/
 .coverage
 htmlcov/
 

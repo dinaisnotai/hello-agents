@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..models.schemas import Attraction, Location
+from ..config import settings
 from .attraction_scorer import AttractionScorer
 from .candidate_acceptance_policy import CandidateAcceptancePolicy
 from .place_name_service import normalize_place_name, place_names_match
+from .travel_knowledge_service import get_travel_knowledge_service
 
 
 @dataclass(frozen=True)
@@ -157,6 +159,7 @@ class SpatialItineraryPlanner:
     remote_travel_threshold_minutes = 120
     remote_nearby_radius_meters = 20_000
     attraction_scorer = AttractionScorer()
+    knowledge_service = get_travel_knowledge_service()
 
     def plan(
         self,
@@ -929,6 +932,10 @@ class SpatialItineraryPlanner:
             - transfer_cost * 0.1
             - diversity_cost
         )
+        if settings.enable_travel_knowledge and current_group:
+            # Curated pair knowledge is deliberately a small tie-breaker; it
+            # cannot override route feasibility or daily capacity.
+            score += self.knowledge_service.pair_delta_any(current_group[-1], attraction) / 100.0
         return (
             -score,
             -attraction.first_visit_priority,

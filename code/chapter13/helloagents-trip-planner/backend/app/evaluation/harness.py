@@ -11,8 +11,11 @@ from ..models.schemas import Attraction, TripPlan
 from ..services.attraction_scorer import AttractionScorer
 from ..services.place_name_service import place_names_match
 from ..services.poi_identity_resolver import POIIdentityResolver
+from ..services.travel_knowledge_service import get_travel_knowledge_service
+from ..config import settings
 from ..services.planning_observability import calculate_portfolio_metrics
 from .schemas import (
+    ABEvaluationReport,
     CriterionResult,
     EvaluationCase,
     EvaluationReport,
@@ -60,6 +63,31 @@ class EvaluationHarness:
             passed_cases=passed,
             pass_rate=round(passed / max(1, len(results)), 4),
             results=results,
+        )
+
+    def run_ab(
+        self,
+        cases: Iterable[EvaluationCase],
+        enabled_planner: Callable,
+    ) -> ABEvaluationReport:
+        """Run the same cases with the baseline and a knowledge-enabled planner."""
+        frozen_cases = list(cases)
+        baseline = self.run(frozen_cases)
+        enabled = EvaluationHarness(enabled_planner).run(frozen_cases)
+        metric_deltas: dict[str, float] = {}
+        for name in ("planner_constraint_score", "final_experience_score", "repair_count", "rollback_rate"):
+            left = [float(item.metrics[name]) for item in baseline.results if name in item.metrics]
+            right = [float(item.metrics[name]) for item in enabled.results if name in item.metrics]
+            if left and right:
+                metric_deltas[name] = round(sum(right) / len(right) - sum(left) / len(left), 4)
+        hard_regression = enabled.passed_cases < baseline.passed_cases and any(
+            item.constraint_passed is False for item in enabled.results
+        )
+        return ABEvaluationReport(
+            baseline=baseline,
+            enabled=enabled,
+            metric_deltas=metric_deltas,
+            hard_regression=hard_regression,
         )
 
 
@@ -302,6 +330,71 @@ def evaluate_plan(case: EvaluationCase, plan: TripPlan) -> EvaluationResult:
             )
         )
 
+    if quality.elderly_friendliness:
+        elderly = [
+            item.name
+            for item in attractions
+            if item.intensity_level != "high"
+            and (item.accessible is True or item.estimated_internal_walking_km <= 1.5)
+        ]
+        criteria.append(
+            _criterion(
+                "elderly_friendliness",
+                bool(elderly),
+                elderly,
+                "at least one low/medium intensity accessible or low-walk POI",
+            )
+        )
+    if quality.weather_suitability:
+        risky_days = []
+        for day in plan.days:
+            weather = next((item for item in plan.weather_info if item.date == day.date), None)
+            condition = f"{weather.day_weather} {weather.night_weather}" if weather else ""
+            if any(token in condition for token in ("雨", "雷", "高温", "炎热", "rain", "hot")):
+                risky_days.append(day)
+        weather_ok = all(day.weather_backup or day.weather_warning or not day.attractions for day in risky_days)
+        criteria.append(_criterion("weather_suitability", weather_ok, len(risky_days), "risky days have backup or warning"))
+    if quality.traveler_fit:
+        traveler_text = " ".join(request.travelers).lower()
+        family = any(token in traveler_text for token in ("child", "family", "亲子", "儿童"))
+        elderly = any(token in traveler_text for token in ("elderly", "senior", "老人", "老年"))
+        traveler_ok = bool(attractions) and (
+            not family or any("family" in item.tags or item.intensity_level != "high" for item in attractions)
+        ) and (
+            not elderly or all(item.intensity_level != "high" for item in attractions)
+        )
+        criteria.append(_criterion("traveler_fit", traveler_ok, traveler_text, "traveler-compatible selected POIs"))
+    if quality.planning_zone_coherence:
+        max_zones = max((len({item.area for item in day.attractions if item.area}) for day in plan.days), default=0)
+        criteria.append(_criterion("planning_zone_coherence", max_zones <= 2, max_zones, 2))
+
+    if quality.min_experience_score is not None:
+        actual_experience = (
+            plan.quality_evaluation.overall_score
+            if plan.quality_evaluation is not None else 0.0
+        )
+        criteria.append(_criterion(
+            "min_experience_score",
+            actual_experience >= quality.min_experience_score,
+            actual_experience,
+            quality.min_experience_score,
+        ))
+
+    if quality.pair_compatibility:
+        knowledge = get_travel_knowledge_service()
+        pair_values = [
+            knowledge.pair_delta_any(left, right)
+            for day in plan.days
+            for left, right in zip(day.attractions, day.attractions[1:])
+        ]
+        positive_pairs = sum(value >= 0 for value in pair_values)
+        criteria.append(_criterion(
+            "pair_compatibility",
+            all(value >= 0 for value in pair_values),
+            pair_values,
+            "no explicitly discouraged adjacent pair",
+        ))
+
     metrics = {
         "selected_pois": len(attractions),
         "categories": len(categories),
@@ -316,7 +409,32 @@ def evaluate_plan(case: EvaluationCase, plan: TripPlan) -> EvaluationResult:
             2,
         ),
         "planner_constraint_score": plan.constraint_report.score,
+        "repair_count": len(plan.repair_attempts),
+        "repair_commit_rate": (
+            sum(item.status.value == "committed" for item in plan.repair_attempts)
+            / max(1, len(plan.repair_attempts))
+        ),
+        "rollback_rate": (
+            sum(item.status.value == "rolled_back" for item in plan.repair_attempts)
+            / max(1, len(plan.repair_attempts))
+        ),
+        "final_experience_score": (
+            plan.quality_evaluation.overall_score
+            if plan.quality_evaluation is not None
+            else 0.0
+        ),
     }
+    if settings.enable_travel_knowledge:
+        service = get_travel_knowledge_service()
+        known = [service.resolve_poi(request.city, item) for item in attractions]
+        known = [item for item in known if item is not None]
+        metrics["knowledge_coverage"] = round(len(known) / max(1, len(attractions)), 4)
+        metrics["knowledge_feature_delta"] = round(
+            sum(float(item.score_breakdown.get("knowledge_total_delta", 0.0)) for item in attractions), 2
+        )
+    else:
+        metrics["knowledge_coverage"] = 0.0
+        metrics["knowledge_feature_delta"] = 0.0
     portfolio = (
         plan.observability_trace.portfolio_metrics
         if plan.observability_trace is not None

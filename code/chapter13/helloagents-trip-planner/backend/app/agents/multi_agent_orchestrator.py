@@ -161,11 +161,16 @@ class MultiAgentOrchestrator:
         weather = specialist_results["WeatherQueryAgent"]
         hotels = specialist_results["HotelAgent"]
 
-        evidence = self.plan_builder.rag.search(
-            request.city,
-            self.plan_builder.build_rag_query(request),
-            top_k=5,
-        )
+        query = self.plan_builder.build_rag_query(request)
+        metadata_builder = getattr(self.plan_builder, "build_rag_metadata", None)
+        if callable(metadata_builder):
+            evidence = self.plan_builder.rag.search(
+                request.city, query, top_k=5, metadata=metadata_builder(request)
+            )
+        else:
+            # Preserve compatibility with lightweight test/durable builders
+            # that implement the legacy RAG boundary only.
+            evidence = self.plan_builder.rag.search(request.city, query, top_k=5)
 
         started_at = perf_counter()
         plan = self.planner_agent.run(

@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     langgraph_checkpoint_db_path: str = ""
     enable_llm_intent_parsing: bool = False
     enable_context_governance: bool = True
+    # Travel Knowledge is an internal advisory layer.  Keep it off for
+    # backwards-compatible rollout until the paired evaluation gate passes.
+    enable_travel_knowledge: bool = False
+    travel_knowledge_data_dir: str = ""
+    travel_knowledge_retrieval_mode: str = "legacy"
+    travel_knowledge_embedding_cache_path: str = ".cache/travel_knowledge_embeddings.json"
 
     # 日志配置
     log_level: str = "INFO"

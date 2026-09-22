@@ -6,7 +6,9 @@ from math import asin, cos, radians, sin, sqrt
 from typing import Iterable, Sequence
 
 from ..models.schemas import Attraction, Location, TripRequest
+from ..config import settings
 from .poi_metadata_service import preference_matches_categories
+from .travel_knowledge_service import TravelKnowledgeService, get_travel_knowledge_service
 
 
 class AttractionScorer:
@@ -16,12 +18,16 @@ class AttractionScorer:
     handles only soft route quality: fit, value, proximity and variety.
     """
 
+    def __init__(self, knowledge_service: TravelKnowledgeService | None = None) -> None:
+        self.knowledge_service = knowledge_service or get_travel_knowledge_service()
+
     def score_candidates(
         self,
         attractions: Iterable[Attraction],
         request: TripRequest,
         hotel_location: Location | None,
         available_minutes: int,
+        weather_risks: Sequence[str] = (),
     ) -> list[Attraction]:
         return [
             self.score_attraction(
@@ -30,6 +36,7 @@ class AttractionScorer:
                 anchor=hotel_location,
                 existing=(),
                 available_minutes=available_minutes,
+                weather_risks=weather_risks,
             )
             for attraction in attractions
         ]
@@ -42,6 +49,7 @@ class AttractionScorer:
         anchor: Location | None,
         existing: Sequence[Attraction],
         available_minutes: int,
+        weather_risks: Sequence[str] = (),
     ) -> Attraction:
         tags = self._tags(attraction)
         inherited = dict(attraction.score_breakdown)
@@ -71,12 +79,21 @@ class AttractionScorer:
         category = self.category_bucket(attraction)
         repeat_count = sum(self.category_bucket(item) == category for item in existing)
         diversity_penalty = 0.0 if repeat_count == 0 else 8.0 * repeat_count
+        knowledge_delta = 0.0
+        knowledge_breakdown = {}
+        if settings.enable_travel_knowledge:
+            knowledge_delta, knowledge_breakdown = self.knowledge_service.score_delta(
+                attraction,
+                request,
+                weather_risks=weather_risks,
+                available_minutes=available_minutes,
+            )
 
         total = max(
             0.0,
             min(
                 100.0,
-                base_score
+                base_score + knowledge_delta
                 - distance_penalty - budget_penalty - time_penalty - diversity_penalty,
             ),
         )
@@ -91,6 +108,8 @@ class AttractionScorer:
             "budget_penalty": round(-budget_penalty, 2),
             "time_fit_penalty": round(-time_penalty, 2),
             "diversity_penalty": round(-diversity_penalty, 2),
+            **knowledge_breakdown,
+            "knowledge_total_delta": round(knowledge_delta, 2),
             "estimated_travel_minutes": round(travel_minutes, 2),
             "total_score": round(total, 2),
             "preference_match": 10.0 if preference_matched else inherited.get("preference_match", 0.0),

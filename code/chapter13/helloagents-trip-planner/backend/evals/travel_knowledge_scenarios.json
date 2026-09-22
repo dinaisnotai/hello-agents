@@ -1,0 +1,1712 @@
+[
+  {
+    "name": "knowledge_beijing_01_elderly",
+    "description": "Knowledge evaluation fixture: Beijing elderly",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_02_family",
+    "description": "Knowledge evaluation fixture: Beijing family",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [
+        "family",
+        "children"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_03_rain",
+    "description": "Knowledge evaluation fixture: Beijing rain",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "rainy day indoor backup",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_04_hot",
+    "description": "Knowledge evaluation fixture: Beijing hot",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "hot weather reduce outdoor walking",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_05_holiday",
+    "description": "Knowledge evaluation fixture: Beijing holiday",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "holiday peak avoid overpacked route",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_06_first_visit",
+    "description": "Knowledge evaluation fixture: Beijing first_visit",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "knowledge_beijing_07_museum",
+    "description": "Knowledge evaluation fixture: Beijing museum",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture",
+        "museum"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_08_landmark",
+    "description": "Knowledge evaluation fixture: Beijing landmark",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "classic",
+        "history"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_09_low_walk",
+    "description": "Knowledge evaluation fixture: Beijing low_walk",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "low mobility short walking",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_10_zone",
+    "description": "Knowledge evaluation fixture: Beijing zone",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": true,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_11_elderly",
+    "description": "Knowledge evaluation fixture: Beijing elderly",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_12_family",
+    "description": "Knowledge evaluation fixture: Beijing family",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [
+        "family",
+        "children"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_13_rain",
+    "description": "Knowledge evaluation fixture: Beijing rain",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "rainy day indoor backup",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_14_hot",
+    "description": "Knowledge evaluation fixture: Beijing hot",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "hot weather reduce outdoor walking",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_15_holiday",
+    "description": "Knowledge evaluation fixture: Beijing holiday",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "holiday peak avoid overpacked route",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_16_first_visit",
+    "description": "Knowledge evaluation fixture: Beijing first_visit",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "knowledge_beijing_17_museum",
+    "description": "Knowledge evaluation fixture: Beijing museum",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture",
+        "museum"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_18_landmark",
+    "description": "Knowledge evaluation fixture: Beijing landmark",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "classic",
+        "history"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_19_low_walk",
+    "description": "Knowledge evaluation fixture: Beijing low_walk",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "low mobility short walking",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_beijing_20_zone",
+    "description": "Knowledge evaluation fixture: Beijing zone",
+    "input_request": {
+      "city": "Beijing",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": true,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_01_elderly",
+    "description": "Knowledge evaluation fixture: Shanghai elderly",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_02_family",
+    "description": "Knowledge evaluation fixture: Shanghai family",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [
+        "family",
+        "children"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_03_rain",
+    "description": "Knowledge evaluation fixture: Shanghai rain",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "rainy day indoor backup",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_04_hot",
+    "description": "Knowledge evaluation fixture: Shanghai hot",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "hot weather reduce outdoor walking",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_05_holiday",
+    "description": "Knowledge evaluation fixture: Shanghai holiday",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "holiday peak avoid overpacked route",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_06_first_visit",
+    "description": "Knowledge evaluation fixture: Shanghai first_visit",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "knowledge_shanghai_07_museum",
+    "description": "Knowledge evaluation fixture: Shanghai museum",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture",
+        "museum"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_08_landmark",
+    "description": "Knowledge evaluation fixture: Shanghai landmark",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "classic",
+        "history"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_09_low_walk",
+    "description": "Knowledge evaluation fixture: Shanghai low_walk",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "low mobility short walking",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_10_zone",
+    "description": "Knowledge evaluation fixture: Shanghai zone",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": true,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_11_elderly",
+    "description": "Knowledge evaluation fixture: Shanghai elderly",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_12_family",
+    "description": "Knowledge evaluation fixture: Shanghai family",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [
+        "family",
+        "children"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_13_rain",
+    "description": "Knowledge evaluation fixture: Shanghai rain",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "rainy day indoor backup",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_14_hot",
+    "description": "Knowledge evaluation fixture: Shanghai hot",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "hot weather reduce outdoor walking",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_15_holiday",
+    "description": "Knowledge evaluation fixture: Shanghai holiday",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "holiday peak avoid overpacked route",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_16_first_visit",
+    "description": "Knowledge evaluation fixture: Shanghai first_visit",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "knowledge_shanghai_17_museum",
+    "description": "Knowledge evaluation fixture: Shanghai museum",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture",
+        "museum"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_18_landmark",
+    "description": "Knowledge evaluation fixture: Shanghai landmark",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "classic",
+        "history"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_19_low_walk",
+    "description": "Knowledge evaluation fixture: Shanghai low_walk",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "low mobility short walking",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_shanghai_20_zone",
+    "description": "Knowledge evaluation fixture: Shanghai zone",
+    "input_request": {
+      "city": "Shanghai",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": true,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_01_elderly",
+    "description": "Knowledge evaluation fixture: Hangzhou elderly",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_02_family",
+    "description": "Knowledge evaluation fixture: Hangzhou family",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [
+        "family",
+        "children"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_03_rain",
+    "description": "Knowledge evaluation fixture: Hangzhou rain",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "rainy day indoor backup",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_04_hot",
+    "description": "Knowledge evaluation fixture: Hangzhou hot",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "hot weather reduce outdoor walking",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_05_holiday",
+    "description": "Knowledge evaluation fixture: Hangzhou holiday",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "holiday peak avoid overpacked route",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_06_first_visit",
+    "description": "Knowledge evaluation fixture: Hangzhou first_visit",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_07_museum",
+    "description": "Knowledge evaluation fixture: Hangzhou museum",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture",
+        "museum"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_08_landmark",
+    "description": "Knowledge evaluation fixture: Hangzhou landmark",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "classic",
+        "history"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_09_low_walk",
+    "description": "Knowledge evaluation fixture: Hangzhou low_walk",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "low mobility short walking",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_10_zone",
+    "description": "Knowledge evaluation fixture: Hangzhou zone",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": true,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_11_elderly",
+    "description": "Knowledge evaluation fixture: Hangzhou elderly",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_12_family",
+    "description": "Knowledge evaluation fixture: Hangzhou family",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [
+        "family",
+        "children"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_13_rain",
+    "description": "Knowledge evaluation fixture: Hangzhou rain",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "rainy day indoor backup",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_14_hot",
+    "description": "Knowledge evaluation fixture: Hangzhou hot",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "hot weather reduce outdoor walking",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": true,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_15_holiday",
+    "description": "Knowledge evaluation fixture: Hangzhou holiday",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "holiday peak avoid overpacked route",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_16_first_visit",
+    "description": "Knowledge evaluation fixture: Hangzhou first_visit",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": true
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_17_museum",
+    "description": "Knowledge evaluation fixture: Hangzhou museum",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture",
+        "museum"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_18_landmark",
+    "description": "Knowledge evaluation fixture: Hangzhou landmark",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "classic",
+        "history"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": true,
+      "prefer_classic": true
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_19_low_walk",
+    "description": "Knowledge evaluation fixture: Hangzhou low_walk",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [],
+      "free_text_input": "low mobility short walking",
+      "pace": "relaxed",
+      "travelers": [
+        "elderly"
+      ],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": true,
+      "traveler_fit": true,
+      "weather_suitability": false,
+      "planning_zone_coherence": false,
+      "pair_compatibility": false,
+      "category_diversity": false
+    }
+  },
+  {
+    "name": "knowledge_hangzhou_20_zone",
+    "description": "Knowledge evaluation fixture: Hangzhou zone",
+    "input_request": {
+      "city": "Hangzhou",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-11",
+      "travel_days": 2,
+      "transportation": "public transit",
+      "accommodation": "budget hotel",
+      "preferences": [
+        "culture"
+      ],
+      "free_text_input": "",
+      "pace": "balanced",
+      "travelers": [],
+      "first_visit": false,
+      "prefer_classic": false
+    },
+    "constraints": {},
+    "quality_expectations": {
+      "elderly_friendliness": false,
+      "traveler_fit": false,
+      "weather_suitability": false,
+      "planning_zone_coherence": true,
+      "pair_compatibility": true,
+      "category_diversity": false
+    }
+  }
+]

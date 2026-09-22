@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "created_at": "2026-07-30T08:15:19.059512Z",
+  "created_at": "2026-07-30T13:38:40.961215Z",
   "total_cases": 15,
   "passed_cases": 15,
   "pass_rate": 1.0,
@@ -62,9 +62,10 @@
         "repeated_subcategory_ratio": 0.167,
         "preference_coverage": 0.0,
         "landmark_coverage": 0.8,
-        "portfolio_balance_score": 77.7
+        "portfolio_balance_score": 77.7,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.124
+      "latency_seconds": 0.126
     },
     {
       "case_name": "elderly_beijing_trip",
@@ -150,9 +151,10 @@
         "repeated_subcategory_ratio": 0.375,
         "preference_coverage": 0.75,
         "landmark_coverage": 0.8,
-        "portfolio_balance_score": 83.5
+        "portfolio_balance_score": 83.5,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.105
+      "latency_seconds": 0.1472
     },
     {
       "case_name": "museum_lover_beijing_trip",
@@ -197,9 +199,10 @@
         "repeated_subcategory_ratio": 0.286,
         "preference_coverage": 0.143,
         "landmark_coverage": 0.8,
-        "portfolio_balance_score": 78.1
+        "portfolio_balance_score": 78.1,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.1174
+      "latency_seconds": 0.1196
     },
     {
       "case_name": "food_lover_shanghai_trip",
@@ -245,9 +248,10 @@
         "repeated_subcategory_ratio": 0.0,
         "preference_coverage": 0.2,
         "landmark_coverage": 1.0,
-        "portfolio_balance_score": 84.0
+        "portfolio_balance_score": 84.0,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.0744
+      "latency_seconds": 0.0766
     },
     {
       "case_name": "family_with_children_beijing_trip",
@@ -311,9 +315,10 @@
         "repeated_subcategory_ratio": 0.333,
         "preference_coverage": 0.333,
         "landmark_coverage": 0.6,
-        "portfolio_balance_score": 72.0
+        "portfolio_balance_score": 72.0,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.0985
+      "latency_seconds": 0.1021
     },
     {
       "case_name": "tight_budget_beijing_trip",
@@ -353,9 +358,10 @@
         "repeated_subcategory_ratio": 0.0,
         "preference_coverage": 0.75,
         "landmark_coverage": 0.4,
-        "portfolio_balance_score": 73.0
+        "portfolio_balance_score": 73.0,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.1153
+      "latency_seconds": 0.1163
     },
     {
       "case_name": "relaxed_pace_hangzhou_trip",
@@ -419,9 +425,10 @@
         "repeated_subcategory_ratio": 0.25,
         "preference_coverage": 0.5,
         "landmark_coverage": 1.0,
-        "portfolio_balance_score": 82.5
+        "portfolio_balance_score": 82.5,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.0782
+      "latency_seconds": 0.0762
     },
     {
       "case_name": "palace_parent_child_dedup",
@@ -483,9 +490,10 @@
         "repeated_subcategory_ratio": 0.2,
         "preference_coverage": 1.0,
         "landmark_coverage": 0.6,
-        "portfolio_balance_score": 78.0
+        "portfolio_balance_score": 78.0,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.0932
+      "latency_seconds": 0.198
     },
     {
       "case_name": "multi_day_palace_no_repeat",
@@ -549,9 +557,10 @@
         "repeated_subcategory_ratio": 0.143,
         "preference_coverage": 0.857,
         "landmark_coverage": 1.0,
-        "portfolio_balance_score": 97.1
+        "portfolio_balance_score": 97.1,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.1003
+      "latency_seconds": 0.1067
     },
     {
       "case_name": "portfolio_first_visit_family_beijing",
@@ -770,9 +779,10 @@
         "repeated_subcategory_ratio": 0.167,
         "preference_coverage": 0.0,
         "landmark_coverage": 0.8,
-        "portfolio_balance_score": 77.7
+        "portfolio_balance_score": 77.7,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.1008
+      "latency_seconds": 0.1168
     },
     {
       "case_name": "portfolio_first_visit_history_beijing",
@@ -998,9 +1008,10 @@
         "repeated_subcategory_ratio": 0.167,
         "preference_coverage": 1.0,
         "landmark_coverage": 0.8,
-        "portfolio_balance_score": 87.7
+        "portfolio_balance_score": 87.7,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.1009
+      "latency_seconds": 0.1012
     },
     {
       "case_name": "portfolio_explicit_deep_history_beijing",
@@ -1195,9 +1206,10 @@
         "repeated_subcategory_ratio": 0.286,
         "preference_coverage": 0.714,
         "landmark_coverage": 0.2,
-        "portfolio_balance_score": 51.1
+        "portfolio_balance_score": 51.1,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.1319
+      "latency_seconds": 0.1376
     },
     {
       "case_name": "portfolio_no_preference_beijing",
@@ -1250,9 +1262,10 @@
         "repeated_subcategory_ratio": 0.167,
         "preference_coverage": 0.0,
         "landmark_coverage": 0.8,
-        "portfolio_balance_score": 77.7
+        "portfolio_balance_score": 77.7,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.1198
+      "latency_seconds": 0.1312
     },
     {
       "case_name": "portfolio_sparse_strong_preference",
@@ -1305,9 +1318,10 @@
         "repeated_subcategory_ratio": 0.167,
         "preference_coverage": 0.0,
         "landmark_coverage": 0.8,
-        "portfolio_balance_score": 77.7
+        "portfolio_balance_score": 77.7,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.1076
+      "latency_seconds": 0.1064
     },
     {
       "case_name": "portfolio_preference_core_conflict_explained",
@@ -1491,9 +1505,10 @@
         "repeated_subcategory_ratio": 0.286,
         "preference_coverage": 0.429,
         "landmark_coverage": 0.8,
-        "portfolio_balance_score": 83.9
+        "portfolio_balance_score": 83.9,
+        "context_governance_enabled": false
       },
-      "latency_seconds": 0.115
+      "latency_seconds": 0.1135
     }
   ]
 }

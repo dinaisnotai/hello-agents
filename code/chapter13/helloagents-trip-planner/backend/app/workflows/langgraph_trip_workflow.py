@@ -288,9 +288,14 @@ class LangGraphTripWorkflow:
         try:
             node_input = SpecialistNodeInput(request=state["request"], intent=TravelIntent.model_validate(state["intent"]))
             request = TripRequest.model_validate(node_input.request)
-            evidence = self.orchestrator.plan_builder.rag.search(
-                request.city, self.orchestrator.plan_builder.build_rag_query(request), top_k=5
-            )
+            query = self.orchestrator.plan_builder.build_rag_query(request)
+            metadata_builder = getattr(self.orchestrator.plan_builder, "build_rag_metadata", None)
+            if callable(metadata_builder):
+                evidence = self.orchestrator.plan_builder.rag.search(
+                    request.city, query, top_k=5, metadata=metadata_builder(request)
+                )
+            else:
+                evidence = self.orchestrator.plan_builder.rag.search(request.city, query, top_k=5)
             self._log(state, "rag", "completed", f"evidence={len(evidence)}")
             return {"rag_results": [item.model_dump(mode="json") for item in evidence], "trace": [self._trace("rag", "completed")]}
         except Exception as exc:

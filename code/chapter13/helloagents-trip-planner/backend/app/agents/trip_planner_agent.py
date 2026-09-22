@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Sequence, Set
 from uuid import uuid4
 import logging
+from ..config import settings
 from ..models.schemas import (
     Attraction,
     CandidateScoreDebug,
@@ -61,12 +62,14 @@ from ..services.planning_observability import (
 from ..services.poi_identity_resolver import POIIdentityResolver
 from ..services.itinerary_quality import ItineraryCompletenessGate
 from ..services.repair_controller import RepairController
+from ..services.travel_knowledge_service import get_travel_knowledge_service
 from ..services.plan_mutation_sandbox import (
     CommitDecision,
     PlanMutationSandbox,
 )
 from ..services.poi_category_service import POI_CATEGORY_LABELS, classify_poi
 from ..services.poi_metadata_service import (
+    PREFERENCE_CATEGORY_MAP,
     build_preference_profile,
     enrich_attraction,
     enrich_poi,
@@ -1154,6 +1157,7 @@ class MultiAgentTripPlanner:
             self.identity_resolver
         )
         self.repair_controller = RepairController(self)
+        self.travel_knowledge = get_travel_knowledge_service()
 
     def plan_trip(
         self,
@@ -1167,7 +1171,16 @@ class MultiAgentTripPlanner:
             request, hotel_candidates, attractions
         )
         weather = self._weather_for_dates(request)
-        evidence = self.rag.search(request.city, self.build_rag_query(request), top_k=5)
+        query = self.build_rag_query(request)
+        try:
+            evidence = self.rag.search(
+                request.city, query, top_k=5,
+                metadata=self.build_rag_metadata(request),
+            )
+        except TypeError:
+            # Keep compatibility with injected legacy RAG doubles and older
+            # implementations while the metadata-aware boundary rolls out.
+            evidence = self.rag.search(request.city, query, top_k=5)
 
         plan = self.build_plan_from_inputs(
             request=request,
@@ -1210,6 +1223,11 @@ class MultiAgentTripPlanner:
             )
             for attraction in attractions
         ]
+        if settings.enable_travel_knowledge:
+            attractions = [
+                self.travel_knowledge.enrich_attraction(item, effective_request)
+                for item in attractions
+            ]
         attractions = self._identity().deduplicate(
             attractions,
             must_visit=effective_request.must_visit,
@@ -1227,6 +1245,9 @@ class MultiAgentTripPlanner:
             effective_request,
             planning_reference,
             daily_time_budget_minutes(effective_request),
+            weather_risks=[
+                f"{item.day_weather} {item.night_weather}" for item in weather
+            ],
         )
         scored_candidates = list(attractions)
         logger.info("========== 路线候选评分（最终） ==========")
@@ -3605,6 +3626,28 @@ class MultiAgentTripPlanner:
                 request.pace,
             ]
         )
+
+    def build_rag_metadata(self, request: TripRequest) -> dict[str, list[str]]:
+        """Build only deterministic filters; uncertain free text stays query text."""
+        metadata: dict[str, list[str]] = {}
+        categories: set[str] = set()
+        for preference in [*request.preferences, *request.soft_preferences]:
+            for label, mapped in PREFERENCE_CATEGORY_MAP.items():
+                if label.lower() in preference.lower():
+                    categories.update(mapped)
+        if categories:
+            metadata["categories"] = sorted(categories)
+        poi_keys: list[str] = []
+        for name in request.must_visit:
+            item = self.travel_knowledge.repository.resolve_poi(request.city, name=name)
+            if item is not None:
+                poi_keys.append(item.poi_key)
+        if poi_keys:
+            metadata["poi_key"] = sorted(set(poi_keys))
+        scenarios = self.travel_knowledge.scenario_tags(request)
+        if scenarios:
+            metadata["scenario_tags"] = scenarios
+        return metadata
 
 
 _multi_agent_planner: Optional[MultiAgentTripPlanner] = None

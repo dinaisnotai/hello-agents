@@ -14,6 +14,8 @@ import httpx
 from ..config import settings
 from ..models.schemas import EvidenceSource
 from .city_name_service import normalize_city_name
+from .hybrid_knowledge_retriever import HybridKnowledgeRetriever
+from .travel_knowledge_repository import get_travel_knowledge_repository
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -108,10 +110,21 @@ class TravelGuideRAG:
         self._chunks: List[Dict[str, Any]] = []
         self._loaded = False
         self._vector_search_available = False
+        self._hybrid_retriever: HybridKnowledgeRetriever | None = None
 
-    def search(self, city: str, query: str, top_k: int = 5) -> List[EvidenceSource]:
+    def search(
+        self,
+        city: str,
+        query: str,
+        top_k: int = 5,
+        *,
+        metadata: Dict[str, Any] | None = None,
+    ) -> List[EvidenceSource]:
         city = normalize_city_name(city)
         self._load()
+
+        if settings.enable_travel_knowledge and settings.travel_knowledge_retrieval_mode == "hybrid":
+            return self._hybrid_search(city, query, top_k, metadata=metadata)
 
         candidates = [chunk for chunk in self._chunks if not city or chunk["city"] == city]
         if not candidates or not query.strip() or top_k <= 0:
@@ -155,10 +168,9 @@ class TravelGuideRAG:
         for chunk in candidates:
             searchable = " ".join((chunk["title"], chunk["tags"], chunk["text"])).lower()
             hits = sum(searchable.count(term) for term in terms)
-            # Keep every city-local guide section usable, even when a query has
-            # no literal overlap (for example a synonym or a very short query).
             score = hits / max(1, len(terms)) if terms else 0.0
-            scored.append((score, chunk))
+            if score > 0:
+                scored.append((score, chunk))
 
         scored.sort(key=lambda item: (item[0], -int(item[1]["index"])), reverse=True)
         return [
@@ -171,6 +183,40 @@ class TravelGuideRAG:
             )
             for score, chunk in scored[:top_k]
         ]
+
+    def _hybrid_search(
+        self,
+        city: str,
+        query: str,
+        top_k: int,
+        *,
+        metadata: Dict[str, Any] | None = None,
+    ) -> List[EvidenceSource]:
+        if self._hybrid_retriever is None:
+            documents = []
+            for chunk in self._chunks:
+                documents.append(
+                    {
+                        "id": f"guide:{chunk['source']}:{chunk['index']}",
+                        "title": chunk["title"],
+                        "text": f"{chunk['tags']} {chunk['text']}",
+                        "city": chunk["city"],
+                        "source": chunk["source"],
+                    }
+                )
+            documents.extend(get_travel_knowledge_repository().all_documents())
+            self._hybrid_retriever = HybridKnowledgeRetriever(
+                documents,
+                embedder=self.embedder,
+                cache_path=settings.travel_knowledge_embedding_cache_path,
+                model_version=settings.embedding_model,
+            )
+        return self._hybrid_retriever.search(
+            city,
+            query,
+            top_k,
+            metadata={"city": city, **(metadata or {})},
+        )
 
     @staticmethod
     def _keyword_terms(query: str) -> List[str]:

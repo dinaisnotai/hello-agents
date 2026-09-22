@@ -75,6 +75,13 @@ The input contains review_context.previous_attempts. Never repeat the same
 issue fingerprint and failed strategy without new candidate evidence. Cite
 only input evidence. Set `pass` based only on blocking issues.
 
+Knowledge governance: `knowledge_summary` is advisory evidence. Heuristic or
+subjective claims may create only non-blocking experience issues. Do not make
+an issue blocking because a curated record recommends or discourages a pairing.
+Only Validator output, explicit hard constraints, confirmed closure, safety
+evidence, or an impossible schedule can be blocking. Static knowledge never
+overrides live map routes, weather, opening status, or prices.
+
 Schema:
 {"pass": true, "overall_score": 8.0, "issues": [{
   "issue_type": "weather_risk",

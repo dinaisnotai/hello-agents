@@ -26,6 +26,7 @@ from ..services.itinerary_quality import ItineraryCompletenessGate
 from ..services.planning_observability import refresh_planning_trace
 from ..services.user_warning_service import curate_user_warnings
 from ..services.context_governance import RoleContextBuilder
+from ..services.travel_knowledge_service import get_travel_knowledge_service
 from .agent_utils import parse_agent_result, run_stateless_agent
 from .prompts import PLANNER_PROMPT
 from .trip_planner_agent import MultiAgentTripPlanner
@@ -47,6 +48,7 @@ class PlannerAgent:
         self.agent: Optional[SimpleAgent] = None
         self.last_warning = ""
         self.context_builder = RoleContextBuilder()
+        self.travel_knowledge = get_travel_knowledge_service()
         if llm is not None:
             self.agent = SimpleAgent(
                 name="PlannerAgent",
@@ -336,6 +338,37 @@ class PlannerAgent:
         *,
         available_attractions,
     ) -> dict:
+        knowledge_summary = []
+        if settings.enable_travel_knowledge:
+            for item in available_attractions:
+                knowledge = self.travel_knowledge.resolve_poi(request.city, item)
+                if knowledge is None:
+                    continue
+                knowledge_summary.append(
+                    {
+                        "poi_key": item.visit_key or item.poi_id or item.name,
+                        "name": item.name,
+                        "environment": knowledge.environment_type.value,
+                        "walking_intensity": knowledge.walking_intensity.value,
+                        "planning_zone": knowledge.planning_zone,
+                        "traveler_tags": knowledge.traveler_tags,
+                        "weather_fit": knowledge.weather_fit,
+                        "confidence": knowledge.confidence,
+                        "knowledge_id": knowledge.knowledge_id,
+                    }
+                )
+            for item in self.travel_knowledge.query_scope_for_request(
+                request, weather_risks=weather_result.risk_summary
+            )[:3]:
+                knowledge_summary.append(
+                    {
+                        "knowledge_id": item.knowledge_id,
+                        "claim_type": item.claim_type.value,
+                        "statement": item.statement,
+                        "confidence": item.confidence,
+                        "source": item.evidence_ids,
+                    }
+                )
         governed = self.context_builder.build(
             role=ContextRole.EXPERIENCE_EVALUATOR,
             request=request,
@@ -343,6 +376,7 @@ class PlannerAgent:
             candidates=available_attractions,
             evidence=evidence,
             weather_risks=weather_result.risk_summary,
+            knowledge_summary=knowledge_summary,
             run_id=(plan.observability_trace.run_id if plan.observability_trace else ""),
         )
         plan.context_traces.append(
@@ -380,6 +414,7 @@ class PlannerAgent:
                 "instruction": "Do not repeat a failed issue fingerprint and repair strategy without new evidence.",
             },
             "evidence": payload.get("evidence", []),
+            "knowledge_summary": payload.get("knowledge_summary", []),
             "context_governance": governed.model_dump(mode="json", exclude={"payload"}),
         }
 

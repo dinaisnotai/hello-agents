@@ -23,7 +23,7 @@ _POLICIES = {
     ContextRole.EXPERIENCE_EVALUATOR: ContextPolicy(
         role=ContextRole.EXPERIENCE_EVALUATOR,
         required_sections=["request", "hard_constraints", "plan_summary", "validation"],
-        optional_sections=["weather", "candidates", "repair_history", "evidence"],
+        optional_sections=["weather", "candidates", "repair_history", "knowledge_summary", "evidence"],
         forbidden_sections=["raw_map_response", "full_candidate_pool", "checkpoint"],
         max_estimated_tokens=2400, max_candidates=8, max_rag_evidence_items=3,
         section_priorities={"repair_history": 1, "evidence": 2, "candidates": 3, "weather": 4},
@@ -52,7 +52,7 @@ class RoleContextBuilder:
     def policy_for(self, role: ContextRole) -> ContextPolicy:
         return _POLICIES[role].model_copy(deep=True)
 
-    def build(self, *, role: ContextRole, request: TripRequest, plan: TripPlan, issue=None, candidates: Sequence[Attraction] = (), evidence: Sequence[EvidenceSource] = (), weather_risks: Sequence[str] = (), policy: ContextPolicy | None = None, run_id: str = "") -> GovernedContext:
+    def build(self, *, role: ContextRole, request: TripRequest, plan: TripPlan, issue=None, candidates: Sequence[Attraction] = (), evidence: Sequence[EvidenceSource] = (), weather_risks: Sequence[str] = (), knowledge_summary: Sequence[dict] = (), policy: ContextPolicy | None = None, run_id: str = "") -> GovernedContext:
         policy = policy or self.policy_for(role)
         hard = self._hard_constraints(request, plan)
         payload = {
@@ -62,7 +62,7 @@ class RoleContextBuilder:
             "validation": self._validation(plan),
         }
         included = list(payload)
-        optional = self._optional(role, plan, issue, candidates, evidence, weather_risks, policy)
+        optional = self._optional(role, plan, issue, candidates, evidence, weather_risks, knowledge_summary, policy)
         payload.update(optional)
         included.extend(optional)
         before = self.estimator.estimate(payload)
@@ -92,12 +92,14 @@ class RoleContextBuilder:
     def trace(context: GovernedContext, *, node_name: str, run_id: str = "", issue_fingerprint: str = "", model: str = "") -> ContextTrace:
         return ContextTrace(run_id=run_id, node_name=node_name, role=context.role, policy_version=context.policy_version, plan_version=context.plan_version, issue_fingerprint=issue_fingerprint, estimated_tokens_before=context.estimated_tokens_before, estimated_tokens_after=context.estimated_tokens, included_sections=context.included_sections, omitted_sections=context.omitted_sections, truncated_sections=context.truncated_sections, truncation_reasons=context.truncation_reasons, artifact_references=context.artifact_references, hard_constraints_present=context.hard_constraints_present, required_context_over_budget=context.required_context_over_budget, model=model)
 
-    def _optional(self, role, plan, issue, candidates, evidence, weather_risks, policy):
+    def _optional(self, role, plan, issue, candidates, evidence, weather_risks, knowledge_summary, policy):
         result = {}
         if role == ContextRole.EXPERIENCE_EVALUATOR:
             result["weather"] = list(weather_risks)
             result["candidates"] = [self._candidate(item) for item in list(candidates)[:policy.max_candidates]]
             result["repair_history"] = [self._repair(item) for item in plan.repair_attempts[-policy.max_repair_history_items:]]
+            if knowledge_summary:
+                result["knowledge_summary"] = list(knowledge_summary)[:8]
             result["evidence"] = [{"title": item.title, "source": item.source, "snippet": item.snippet} for item in list(evidence)[:policy.max_rag_evidence_items]]
         elif role == ContextRole.REPAIR_STRATEGIST:
             result["issue"] = issue.model_dump(mode="json") if issue else {}
@@ -146,7 +148,18 @@ class RoleContextBuilder:
 
     @staticmethod
     def _candidate(item):
-        return {"id": item.visit_key or item.poi_id, "name": item.name, "category": item.category, "score": item.score}
+        return {
+            "id": item.visit_key or item.poi_id,
+            "name": item.name,
+            "category": item.category,
+            "categories": list(item.categories),
+            "area": item.area,
+            "environment": getattr(item, "environment_type", None) or "unknown",
+            "walking_intensity": item.intensity_level,
+            "accessible": item.accessible,
+            "internal_walking_km": item.estimated_internal_walking_km,
+            "score": item.score,
+        }
 
     @staticmethod
     def _repair(item):
@@ -154,4 +167,4 @@ class RoleContextBuilder:
 
     @staticmethod
     def _trim_order(role):
-        return ["repair_history", "evidence", "candidates", "local_candidates", "weather", "warnings"]
+        return ["repair_history", "evidence", "knowledge_summary", "candidates", "local_candidates", "weather", "warnings"]
