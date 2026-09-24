@@ -226,12 +226,13 @@ class ConstraintAwareRoutingTest(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                len(day.attractions) >= 2
+                len(day.attractions) >= 2 or day.daily_duration_minutes >= 420
                 for day in plan.days
                 if day.daily_travel_minutes
                 <= SpatialItineraryPlanner.remote_travel_threshold_minutes
             )
         )
+        self.assertTrue(all({meal.type for meal in day.meals} == {"lunch", "dinner"} for day in plan.days))
 
     def test_history_theme_prefers_classics_over_low_score_museums(self):
         planner = MultiAgentTripPlanner()

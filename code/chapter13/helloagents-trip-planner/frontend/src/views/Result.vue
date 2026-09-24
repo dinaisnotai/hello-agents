@@ -28,10 +28,21 @@
 
       <div class="workspace">
         <div class="plan-column">
+      <a-alert
+        v-if="tripPlan.failure_reason"
+        type="error"
+        show-icon
+        message="行程已生成，部分要求尚未满足"
+        :description="failureDescription"
+        class="warning"
+      />
+
       <a-row :gutter="16">
         <a-col :xs="24" :md="8">
           <a-card title="预算" :bordered="false">
             <a-statistic title="预计总费用" :value="tripPlan.budget?.total || 0" suffix="元" />
+            <p>全团规划估算，非实时成交价；门票、餐费按人数，住宿按房间和晚数计算。</p>
+            <p>住宿 {{ tripPlan.budget?.total_hotels || 0 }} · 交通 {{ tripPlan.budget?.total_transportation || 0 }} · 餐饮 {{ tripPlan.budget?.total_meals || 0 }} · 门票 {{ tripPlan.budget?.total_attractions || 0 }} 元</p>
             <p v-if="tripPlan.budget?.budget_limit">预算上限：{{ tripPlan.budget.budget_limit }} 元</p>
             <p v-if="tripPlan.budget?.remaining !== undefined">
               剩余/超出：{{ tripPlan.budget.remaining }} 元
@@ -45,9 +56,9 @@
           </a-card>
         </a-col>
         <a-col :xs="24" :md="8">
-          <a-card title="证据" :bordered="false">
-            <a-statistic title="攻略引用" :value="tripPlan.evidence_sources?.length || 0" suffix="条" />
-            <p>用于减少纯 LLM 编造和补充避坑建议</p>
+          <a-card title="行程" :bordered="false">
+            <a-statistic title="旅行天数" :value="tripPlan.days.length" suffix="天" />
+            <p>每天的游览、交通和休息时间见下方行程</p>
           </a-card>
         </a-col>
       </a-row>
@@ -84,8 +95,16 @@
             <a-descriptions :column="2" size="small" bordered>
               <a-descriptions-item label="交通">{{ day.transportation }}</a-descriptions-item>
               <a-descriptions-item label="住宿">{{ day.hotel?.name || day.accommodation }}</a-descriptions-item>
+              <a-descriptions-item label="住宿等级">{{ day.hotel?.type || '等级待确认' }}（{{ day.hotel?.tier_source === 'map_category' ? '地图分类，星级待核实' : '以供应商确认信息为准' }}）</a-descriptions-item>
+              <a-descriptions-item label="住宿估价">{{ day.hotel?.estimated_cost || 0 }} 元/间/晚 · 当天计 {{ day.accommodation_nights ?? 0 }} 晚；{{ day.hotel?.price_note || '非实时房价' }}</a-descriptions-item>
+              <a-descriptions-item v-if="day.hotel?.quoted_total != null" label="供应商全住期金额">{{ day.hotel.quoted_total }} 元（全部房间）；{{ day.hotel.quote_checkin }} 至 {{ day.hotel.quote_checkout }} · {{ day.hotel.price_source === 'sandbox_quote' ? '沙箱测试，非真实可订报价' : '查询报价，预订前复核' }}</a-descriptions-item>
+              <a-descriptions-item v-if="day.hotel?.star_rating" label="供应商星级">{{ day.hotel.star_rating }} 星 · 来源 {{ day.hotel.tier_source }}</a-descriptions-item>
+              <a-descriptions-item label="交通估算">{{ day.daily_transport_cost || 0 }} 元
+                <div v-for="(cost, label) in day.transport_fixed_costs" :key="label">{{ label }}：{{ cost }} 元</div>
+              </a-descriptions-item>
               <a-descriptions-item label="交通总里程">{{ day.daily_distance_km || 0 }} km</a-descriptions-item>
-              <a-descriptions-item label="其中步行">{{ day.daily_walking_distance_km || 0 }} km</a-descriptions-item>
+              <a-descriptions-item label="路线步行">{{ day.daily_walking_distance_km || 0 }} km</a-descriptions-item>
+              <a-descriptions-item label="预计总步行">{{ totalWalkingKm(day) }} km（含景点内）</a-descriptions-item>
               <a-descriptions-item label="游览时间">{{ formatMinutes(day.daily_visit_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="交通时间">{{ formatMinutes(day.daily_travel_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="餐饮及缓冲">{{ formatMinutes(day.daily_buffer_minutes) }}</a-descriptions-item>
@@ -107,7 +126,16 @@
               </template>
             </a-list>
 
-            <a-divider orientation="left">路线段</a-divider>
+            <a-divider orientation="left">用餐安排</a-divider>
+            <a-list :data-source="day.meals" bordered>
+              <template #renderItem="{ item }">
+                <a-list-item>
+                  <a-list-item-meta :title="`${item.type === 'lunch' ? '午餐' : item.type === 'dinner' ? '晚餐' : '早餐'} · ${item.name}`"
+                    :description="`${item.planned_arrival_time || '时间待确认'}—${item.planned_departure_time || ''} · 预留${item.duration_minutes || 0}分钟 · 估算${item.estimated_cost || 0}元/人 · ${item.source === 'map_poi' ? '地图餐厅' : '餐厅待确认'}；${item.description || ''}`" />
+                </a-list-item>
+              </template>
+            </a-list>
+            <a-divider orientation="left">路线段（含已确认餐厅）</a-divider>
             <a-timeline>
               <a-timeline-item v-for="segment in day.route_segments" :key="`${segment.origin}-${segment.destination}`">
                 <div v-if="segment.planned_departure_time || segment.planned_arrival_time" class="route-time">
@@ -129,6 +157,7 @@
                   步行 {{ segment.walking_duration_minutes || 0 }} 分钟 / {{ ((segment.walking_distance_meters || 0) / 1000).toFixed(1) }} km）
                 </template>
                 <div v-if="segment.description" class="route-description">{{ segment.description }}</div>
+                <div v-if="segment.cost_note">费用估算 {{ segment.estimated_cost }} 元（参考 {{ segment.cost_low }}–{{ segment.cost_high }} 元）。{{ segment.cost_note }}</div>
                 <ul v-if="segment.steps?.length" class="route-steps">
                   <li v-for="(step, stepIndex) in segment.steps" :key="stepIndex">
                     {{ routeTypeLabel(step.mode) }}
@@ -143,7 +172,7 @@
         </a-collapse>
       </a-card>
 
-      <a-card v-if="tripPlan.evidence_sources?.length" title="RAG 攻略证据" :bordered="false">
+      <a-card v-if="tripPlan.evidence_sources?.length" title="参考攻略" :bordered="false">
         <a-list :data-source="tripPlan.evidence_sources">
           <template #renderItem="{ item }">
             <a-list-item>
@@ -224,6 +253,15 @@ onMounted(async () => {
 })
 
 const constraintPercent = computed(() => Math.round((tripPlan.value?.constraint_report?.score || 0) * 100))
+const failureDescription = computed(() => {
+  const violations = tripPlan.value?.validation_result?.violations || []
+  const reasons = [...new Set((tripPlan.value?.failure_reason || '').split(/[;；]/).map(item => item.trim()).filter(Boolean))]
+  const onlyWalking = violations.length > 0 && violations.every(item => item.type === 'WALKING_LIMIT')
+  if (onlyWalking) {
+    return [...new Set(violations.map(item => item.message))].join('；') + '。景点安排可以保留作参考，但目前超过你设置的步行上限；总步行包含交通接驳和景点内部估算，修改交通方式或步行上限后需要重新计算。'
+  }
+  return reasons.join('；')
+})
 const totalDistanceKm = computed(() => {
   const meters = tripPlan.value?.route_segments?.reduce((sum, item) => sum + item.distance_meters, 0) || 0
   return Number((meters / 1000).toFixed(1))
@@ -236,6 +274,11 @@ const formatMinutes = (minutes = 0) => {
   const rest = minutes % 60
   return hours ? `${hours}小时${rest ? `${rest}分钟` : ''}` : `${rest}分钟`
 }
+
+const totalWalkingKm = (day: DayPlan) => Number((
+  (day.daily_walking_distance_km || 0) +
+  day.attractions.reduce((sum, item) => sum + (item.estimated_internal_walking_km || 0), 0)
+).toFixed(2))
 
 const dayTitle = (day: DayPlan) => {
   return `第 ${day.day_index + 1} 天｜${day.date}｜${formatMinutes(day.daily_duration_minutes)}｜${day.daily_distance_km || 0} km｜${day.daily_cost || 0} 元`

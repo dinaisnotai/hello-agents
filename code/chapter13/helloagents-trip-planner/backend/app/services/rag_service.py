@@ -6,6 +6,7 @@ import math
 import os
 import re
 import logging
+from threading import Lock
 from pathlib import Path
 from typing import Any, Dict, List, Protocol, Sequence
 
@@ -111,6 +112,7 @@ class TravelGuideRAG:
         self._loaded = False
         self._vector_search_available = False
         self._hybrid_retriever: HybridKnowledgeRetriever | None = None
+        self._load_lock = Lock()
 
     def search(
         self,
@@ -230,6 +232,12 @@ class TravelGuideRAG:
         return list(dict.fromkeys(term for term in terms if term))
 
     def _load(self) -> None:
+        # A shared singleton must not expose a half-embedded corpus to another
+        # request or pay for the same document embeddings twice.
+        with self._load_lock:
+            self._load_once()
+
+    def _load_once(self) -> None:
         if self._loaded:
             return
         if not self.data_dir.exists():
@@ -260,7 +268,7 @@ class TravelGuideRAG:
 
         self._chunks = chunks
         self._loaded = True
-        if not chunks:
+        if not chunks or (settings.enable_travel_knowledge and settings.travel_knowledge_retrieval_mode == "hybrid"):
             return
 
         try:

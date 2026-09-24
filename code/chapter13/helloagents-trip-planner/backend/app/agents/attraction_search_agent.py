@@ -39,7 +39,7 @@ class AttractionSearchAgent:
                 enable_tool_calling=True,
             )
 
-    def run(self, request: TripRequest) -> AttractionSearchResult:
+    def run(self, request: TripRequest, *, evidence=()) -> AttractionSearchResult:
         agent_input = {
             "city": request.city,
             "preferences": request.preferences,
@@ -48,6 +48,9 @@ class AttractionSearchAgent:
             "pace": request.pace,
             "first_visit": request.first_visit,
             "prefer_classic": request.prefer_classic,
+            "requirements": request.free_text_input,
+            "travelers": request.travelers,
+            "guide_evidence": [item.model_dump(mode="json") for item in evidence[:4]],
         }
 
         if self.agent is not None:
@@ -59,8 +62,16 @@ class AttractionSearchAgent:
                         max_tool_iterations=specialist_max_tool_iterations(),
                     )
                 result = parse_agent_result(raw_result, AttractionSearchResult)
+                from .trip_planner_agent import POICollector
+
+                # The model chooses recall queries; only map records provide
+                # names, coordinates, prices and opening hours to the planner.
+                queries = result.search_keywords or [item.name for item in result.attractions[:4]]
+                result.attractions = POICollector(self.search_tool.amap_service).collect_attractions(
+                    request, additional_keywords=queries,
+                )
                 if not result.attractions:
-                    raise ValueError("景点 Agent 没有返回候选景点")
+                    raise ValueError("景点 Agent 的查询没有可验证的地图候选")
                 result.used_fallback = False
                 return result
             except Exception as exc:

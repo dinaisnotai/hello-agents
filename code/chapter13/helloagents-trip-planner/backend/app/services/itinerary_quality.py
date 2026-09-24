@@ -15,6 +15,9 @@ from .attraction_scorer import AttractionScorer
 from .poi_identity_resolver import POIIdentityResolver
 from .poi_metadata_service import build_preference_profile
 from .spatial_planner import SpatialItineraryPlanner
+from .venue_policy import venue_kind
+from .poi_metadata_service import preference_matches_categories
+from .accommodation_selector import AccommodationSelector
 
 
 class ItineraryCompletenessGate:
@@ -34,6 +37,7 @@ class ItineraryCompletenessGate:
         candidates: Sequence[Attraction] = (),
     ) -> ExperienceEvaluation:
         issues: list[ExperienceIssue] = []
+        self._evaluate_product_contract(request, plan, issues)
         self._evaluate_days(request, plan, issues)
         self._evaluate_duplicates(plan, issues)
         self._evaluate_constraints(plan, issues)
@@ -52,6 +56,29 @@ class ItineraryCompletenessGate:
                 "source": "deterministic",
             }
         )
+
+    @staticmethod
+    def _evaluate_product_contract(request, plan, issues):
+        categories = set()
+        for day in plan.days:
+            for attraction in day.attractions:
+                categories.update(attraction.categories)
+                if venue_kind(attraction.name, attraction.category or "") != "attraction":
+                    issues.append(ExperienceIssue(issue_type="safety_risk", severity="critical", day=day.day_index + 1,
+                        evidence=f"{attraction.name}不是可游览景点，不能占用景点名额", repair_strategy=RepairStrategy.RESOLVE_SAFETY_RISK))
+            if day.meals and any(meal.source == "unconfirmed" for meal in day.meals):
+                issues.append(ExperienceIssue(issue_type="experience_quality", severity="info", day=day.day_index + 1,
+                    evidence="用餐已预留时间，但餐厅尚未确认；饮食限制与营业需核实", repair_strategy=RepairStrategy.REPLACE_LOW_VALUE_CATEGORY))
+        missing = [pref for pref in request.preferences if not (
+            any(meal.source == "map_poi" for day in plan.days for meal in day.meals) if "美食" in pref
+            else preference_matches_categories([pref], categories))]
+        if missing:
+            issues.append(ExperienceIssue(issue_type="preference_alignment", severity="warning",
+                evidence="尚未覆盖偏好：" + "、".join(missing), repair_strategy=RepairStrategy.REPLACE_LOW_VALUE_CATEGORY))
+        requested = AccommodationSelector._tier(request.accommodation)
+        if any(day.hotel and requested != "unspecified" and AccommodationSelector._tier(day.hotel.type) != requested for day in plan.days):
+            issues.append(ExperienceIssue(issue_type="experience_quality", severity="info",
+                evidence="酒店档次尚未确认符合住宿偏好", repair_strategy=RepairStrategy.RESELECT_HOTEL))
 
     def merge(
         self,
@@ -459,8 +486,8 @@ class ItineraryCompletenessGate:
         ):
             return False
         return (
-            day.day_utilization_score < 60
-            and day.daily_duration_minutes < 300
+            day.day_utilization_score < 70
+            and day.daily_duration_minutes < 420
         )
 
     @staticmethod

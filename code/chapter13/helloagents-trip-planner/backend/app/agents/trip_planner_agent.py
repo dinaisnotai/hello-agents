@@ -8,7 +8,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Sequence, Set
 from uuid import uuid4
 import logging
+import json
+import re
 from ..config import settings
+from ..services.trip_cost_service import price_day, stay_nights
+from ..services.venue_policy import venue_kind
+from ..services.meal_planner import prepare_meals, schedule_stops
 from ..models.schemas import (
     Attraction,
     CandidateScoreDebug,
@@ -36,8 +41,6 @@ from ..models.quality import (
     CommitDecisionCode,
     PlanChange,
     PlanVersionMetadata,
-    RepairAttempt,
-    RepairAttemptStatus,
     RepairIteration,
     RepairStrategy,
 )
@@ -124,7 +127,10 @@ def daily_time_budget_minutes(request: TripRequest) -> int:
     end = _clock_minutes(request.daily_end_time, -1)
     if start >= 0 and end > start:
         return end - start
-    return get_pace_profile(request.pace).daily_time_budget_minutes
+    # The spatial seed budget predates explicit lunch and dinner. Allow one
+    # additional meal hour in a balanced destination day, never beyond a
+    # user-provided time window.
+    return get_pace_profile(request.pace).daily_time_budget_minutes + (60 if request.pace == "balanced" else 0)
 
 
 class POICollector:
@@ -132,10 +138,19 @@ class POICollector:
         self.amap_service = amap_service
         self.identity_resolver = POIIdentityResolver()
 
-    def collect_attractions(self, request: TripRequest) -> List[Attraction]:
+    def collect_attractions(
+        self, request: TripRequest, *, additional_keywords: Sequence[str] = ()
+    ) -> List[Attraction]:
         recalled = self._recall_candidates(request)
+        for keyword in list(dict.fromkeys(additional_keywords))[:4]:
+            for poi in self._safe_search(keyword, request.city):
+                recalled.append(_POICandidate(
+                    poi=enrich_poi(poi, request.city),
+                    categories=classify_poi(poi.name, poi.type),
+                    recall_sources={f"agent_query:{keyword}"},
+                ))
         filtered = self._filter_candidates(recalled, request)
-        deduplicated = self._deduplicate_candidates(filtered)
+        deduplicated = self._deduplicate_candidates(filtered, request.must_visit)
         scored = self._score_candidates(deduplicated, request)
         selected = self._select_candidates(scored, limit=30)
         return [self._to_attraction(candidate, request) for candidate in selected]
@@ -176,7 +191,6 @@ class POICollector:
                                 recall_sources={"classic_baseline"},
                             )
                         )
-                        break
 
         # Must-visits get a dedicated recall pass. A search result is only
         # promoted when its name actually matches what the user requested.
@@ -186,8 +200,7 @@ class POICollector:
                 for poi in self._safe_search(must_visit, request.city)
                 if place_names_match(must_visit, poi.name)
             ]
-            if matches:
-                poi = max(matches, key=self._poi_quality)
+            for poi in matches:
                 candidates.append(
                     _POICandidate(
                         poi=poi,
@@ -214,6 +227,8 @@ class POICollector:
             for candidate in candidates
             if not candidate.categories.intersection(request.avoid_categories)
             and not self._is_meal_poi(candidate.poi)
+            and not self._is_non_visit_poi(candidate.poi)
+            and venue_kind(candidate.poi.name, candidate.poi.type) == "attraction"
         ]
 
     @staticmethod
@@ -233,7 +248,36 @@ class POICollector:
             )
         )
 
-    def _deduplicate_candidates(self, candidates: List[_POICandidate]) -> List[_POICandidate]:
+    @staticmethod
+    def _is_non_visit_poi(poi: POIInfo) -> bool:
+        """Reject map infrastructure and unavailable places before ranking.
+
+        Map keyword search often returns a road, station, entrance, or a
+        construction-only branch with the same landmark name.  Those records
+        are useful for navigation but cannot fill a travel itinerary.
+        """
+
+        text = f"{poi.name} {poi.type}".lower()
+        return any(
+            term in text
+            for term in (
+                "道路名",
+                "地铁站",
+                "公交站",
+                "交通设施服务",
+                "停车场",
+                "入口",
+                "出口",
+                "派出所",
+                "建设中",
+                "施工中",
+                "暂不开放",
+            )
+        )
+
+    def _deduplicate_candidates(
+        self, candidates: List[_POICandidate], must_visit: Sequence[str] = ()
+    ) -> List[_POICandidate]:
         """Merge duplicate IDs and aliases without losing must-visit metadata."""
 
         unique: List[_POICandidate] = []
@@ -250,8 +294,9 @@ class POICollector:
             existing.matched_preferences.update(candidate.matched_preferences)
             existing.categories.update(candidate.categories)
             existing.recall_sources.update(candidate.recall_sources)
-            if self._poi_quality(candidate.poi) > self._poi_quality(existing.poi):
-                existing.poi = candidate.poi
+            existing.poi = self.identity_resolver.deduplicate(
+                [existing.poi, candidate.poi], must_visit=must_visit
+            )[0]
         return unique
 
     def _score_candidates(
@@ -380,7 +425,13 @@ class POICollector:
             hours_source=poi.hours_source,
         )
 
-    def collect_hotels(self, request: TripRequest) -> List[Hotel]:
+    def collect_hotels(
+        self, request: TripRequest, *, additional_keywords: Sequence[str] = ()
+    ) -> List[Hotel]:
+        from ..services.hotel_quote_service import HotelQuoteService
+        quoted, quote_warning = HotelQuoteService().search(request, self.amap_service)
+        if quoted:
+            return quoted
         keyword = f"{request.hotel_area or request.city} {request.accommodation} 酒店"
         accommodation = request.accommodation.lower()
         if "经济" in accommodation or any(
@@ -393,13 +444,12 @@ class POICollector:
             nightly_cost = 650
         else:
             nightly_cost = 1000
-        if request.budget_limit is not None:
-            daily_budget = request.budget_limit / max(1, request.travel_days)
-            nightly_cost = min(
-                nightly_cost,
-                max(150, int(daily_budget * 0.5)),
-            )
-        pois = self._safe_search(keyword, request.city)
+        # A budget limit cannot change a property's price. Unknown properties
+        # retain a clearly labelled allowance until date-specific quotes exist.
+        pois = []
+        for query in list(dict.fromkeys([*additional_keywords[:3], keyword])):
+            pois.extend(self._safe_search(query, request.city))
+        pois = self.identity_resolver.deduplicate(pois)
         # A keyword search can return nearby attractions, malls, or ordinary
         # restaurants. Those are not accommodation evidence and must never
         # become a numbered "recommended hotel" or a route anchor.
@@ -408,24 +458,29 @@ class POICollector:
             return [
                 Hotel(
                     name=f"{request.hotel_area or request.city}待确认酒店",
-                    type=request.accommodation,
+                    type="等级待确认",
+                    price_note=quote_warning or "未获取可靠酒店资料；当前为规划估价",
                     estimated_cost=nightly_cost,
                     distance="未获取可验证的住宿 POI；请在出发前确认酒店",
                 )
             ]
-        return [
-            Hotel(
+        hotels = []
+        for poi in lodging_pois[:10]:
+            tier = AccommodationSelector._tier(poi.type)
+            allowance = {"budget": 350, "comfortable": 650, "luxury": 1000, "homestay": 450}.get(tier, nightly_cost)
+            hotels.append(Hotel(
                 name=poi.name,
                 address=poi.address,
                 location=poi.location,
-                price_range=f"{nightly_cost}-{nightly_cost + 200}元/晚",
-                rating=str(poi.rating or 4.5),
+                price_range=f"约{allowance}元/间/晚（估算）",
+                rating=str(poi.rating) if poi.rating is not None else "暂无评分",
                 distance="待行程联合评估",
-                type=request.accommodation,
-                estimated_cost=nightly_cost,
-            )
-            for poi in lodging_pois[:5]
-        ]
+                type=poi.type,
+                tier_source="map_category",
+                estimated_cost=allowance,
+                price_note=("按住宿类别预留，非实时房价" if tier != "unspecified" else "等级未知；按住宿意向预留费用，不代表该酒店报价") + "；" + quote_warning,
+            ))
+        return hotels
 
     @staticmethod
     def _is_lodging_poi(poi: POIInfo) -> bool:
@@ -492,7 +547,7 @@ class RouteEvaluator:
         attractions = day.attractions
 
         route_nodes = [
-            (item.name, item.address, item.location) for item in attractions
+            (item.name, item.address or "", item.location) for item in schedule_stops(day) if item.location
         ]
         if attractions and day.hotel and day.hotel.location:
             hotel_node = (day.hotel.name, day.hotel.address, day.hotel.location)
@@ -550,10 +605,30 @@ class RouteEvaluator:
 
 class BudgetEstimator:
     def estimate(self, days: List[DayPlan], request: TripRequest) -> Budget:
-        total_attractions = sum(attr.ticket_price for day in days for attr in day.attractions)
-        total_hotels = sum((day.hotel.estimated_cost if day.hotel else 0) for day in days)
-        total_meals = sum(meal.estimated_cost for day in days for meal in day.meals)
-        total_transportation = sum(30 + int(day.daily_distance_km * 3) for day in days)
+        nights = stay_nights(request)
+        total_attractions = 0
+        total_hotels = 0
+        total_meals = 0
+        total_transportation = 0
+        for index, day in enumerate(days):
+            day.accommodation_nights = int(index < nights)
+            hotel_cost = (day.hotel.estimated_cost if day.hotel else 0) * day.accommodation_nights * request.room_count
+            hotel = day.hotel
+            if (hotel and hotel.quoted_total is not None and hotel.quote_checkin == request.start_date
+                and hotel.quote_checkout == request.end_date and hotel.quote_rooms == request.room_count
+                and hotel.quote_party_size == request.party_size and nights and index < nights):
+                # Allocate the full-stay/all-room amount once, without multiplying it again.
+                import math
+                hotel_cost = math.ceil(hotel.quoted_total * (index + 1) / nights) - math.ceil(hotel.quoted_total * index / nights)
+            attraction_cost = sum(attr.ticket_price for attr in day.attractions) * request.party_size
+            meal_cost = sum(meal.estimated_cost for meal in day.meals) * request.party_size
+            renting = any(word in day.transportation.lower() for word in ("租车", "rental"))
+            transport_cost = price_day(day, request, rental_days=(request.rental_days or request.travel_days) if renting and index == 0 else 0)
+            day.daily_cost = attraction_cost + meal_cost + hotel_cost + transport_cost
+            total_attractions += attraction_cost
+            total_hotels += hotel_cost
+            total_meals += meal_cost
+            total_transportation += transport_cost
         total = total_attractions + total_hotels + total_meals + total_transportation
         remaining = request.budget_limit - total if request.budget_limit is not None else None
         return Budget(
@@ -1103,6 +1178,7 @@ class MultiAgentTripPlanner:
     """Coordinates deterministic planner roles and optional local RAG evidence."""
 
     max_planning_iterations = 3
+    lightweight = False
     max_quality_repair_iterations = 3
 
     def _identity(self) -> POIIdentityResolver:
@@ -1138,9 +1214,10 @@ class MultiAgentTripPlanner:
         longitude, latitude = centers.get(city, (116.397128, 39.916527))
         return Location(longitude=longitude, latitude=latitude)
 
-    def __init__(self):
+    def __init__(self, *, lightweight: bool = False):
+        self.lightweight = lightweight
         self.amap_service = get_amap_service()
-        self.rag = get_travel_guide_rag()
+        self.rag = None if lightweight else get_travel_guide_rag()
         self.poi_collector = POICollector(self.amap_service)
         self.identity_resolver = POIIdentityResolver()
         self.accommodation_selector = AccommodationSelector()
@@ -1159,6 +1236,9 @@ class MultiAgentTripPlanner:
         self.repair_controller = RepairController(self)
         self.travel_knowledge = get_travel_knowledge_service()
 
+    def health_snapshot(self) -> dict:
+        return {"status": "healthy", "service": "trip-planner", "mode": "simple" if self.lightweight else "legacy"}
+
     def plan_trip(
         self,
         request: TripRequest,
@@ -1171,16 +1251,16 @@ class MultiAgentTripPlanner:
             request, hotel_candidates, attractions
         )
         weather = self._weather_for_dates(request)
-        query = self.build_rag_query(request)
-        try:
-            evidence = self.rag.search(
-                request.city, query, top_k=5,
-                metadata=self.build_rag_metadata(request),
-            )
-        except TypeError:
-            # Keep compatibility with injected legacy RAG doubles and older
-            # implementations while the metadata-aware boundary rolls out.
-            evidence = self.rag.search(request.city, query, top_k=5)
+        evidence = []
+        if self.rag is not None:
+            query = self.build_rag_query(request)
+            try:
+                evidence = self.rag.search(
+                    request.city, query, top_k=5,
+                    metadata=self.build_rag_metadata(request),
+                )
+            except TypeError:
+                evidence = self.rag.search(request.city, query, top_k=5)
 
         plan = self.build_plan_from_inputs(
             request=request,
@@ -1204,6 +1284,7 @@ class MultiAgentTripPlanner:
         evidence: List[EvidenceSource],
         constraint_set: ConstraintSet | None = None,
         hotel_candidates: Sequence[Hotel] = (),
+        defer_refinement: bool = False,
     ) -> TripPlan:
         """Build a plan from specialist outputs without searching again."""
 
@@ -1294,12 +1375,22 @@ class MultiAgentTripPlanner:
                 )[:20]
             ],
         )
+        if defer_refinement:
+            # LangGraph owns the bounded repair/review stages. Building its
+            # draft must not secretly run another set of mutations first.
+            self._recalculate(plan, effective_request)
+            plan = self.reviewer.review(plan, effective_request)
+            plan.observability_trace = build_planning_trace(
+                effective_request, plan, candidates=scored_candidates,
+                eligible_candidates=attractions, run_type="graph_draft",
+            )
+            return plan
         plan = self._repair_until_stable(
             plan, effective_request, attractions
         )
         plan = self.reviewer.review(plan, effective_request)
-        if plan.review_scores.route_score < 70 or self._has_underfilled_day(
-            plan
+        if not self.lightweight and (
+            plan.review_scores.route_score < 70 or self._has_underfilled_day(plan)
         ):
             score_before = plan.review_scores.route_score / 100
             self._repair_low_soft_score(
@@ -1367,28 +1458,58 @@ class MultiAgentTripPlanner:
         hotel_candidates: Sequence[Hotel] = (),
         external_evaluator: Callable[[TripPlan], ExperienceEvaluation | None] | None = None,
         initial_external_evaluation: ExperienceEvaluation | None = None,
+        max_iterations: int | None = None,
     ) -> TripPlan:
-        """Bounded repair using one sandboxed candidate/commit path."""
+        """Run bounded, transactional quality repair after the draft exists."""
+
+        if self.lightweight:
+            evaluation = self.completeness_gate.evaluate(request, plan, available_attractions)
+            return self._finalize_quality_loop(
+                plan, request, available_attractions, evaluation, None
+            )
         gate = getattr(self, "completeness_gate", None) or ItineraryCompletenessGate(self._identity())
         self.completeness_gate = gate
         controller = getattr(self, "repair_controller", None) or RepairController(self)
         self.repair_controller = controller
+        external_cache = {}
+
+        def evaluation_key(candidate):
+            return json.dumps(candidate.model_dump(
+                mode="json",
+                include={
+                    "days", "budget", "validation_result", "constraint_report",
+                    "weather_info", "repair_history", "repair_attempts",
+                },
+                exclude={"days": {"__all__": {"primary_plan"}}},
+            ), sort_keys=True, ensure_ascii=False)
+
+        if initial_external_evaluation is not None:
+            external_cache[evaluation_key(plan)] = initial_external_evaluation
+
+        def cached_external(candidate):
+            if external_evaluator is None:
+                return None
+            key = evaluation_key(candidate)
+            if key not in external_cache:
+                external_cache[key] = external_evaluator(candidate)
+            return external_cache[key]
+
         current = plan.model_copy(deep=True)
         self._recalculate(current, request)
+        if initial_external_evaluation is not None:
+            # Recalculation refreshes derived routes and reports, so its
+            # serialized key differs from the caller's draft even though the
+            # itinerary being reviewed is unchanged.
+            external_cache[evaluation_key(current)] = initial_external_evaluation
         for day in current.days:
             if not day.primary_plan:
                 day.primary_plan = deepcopy(day.attractions)
 
         def evaluate(candidate: TripPlan) -> ExperienceEvaluation:
-            external = external_evaluator(candidate) if external_evaluator else None
+            external = cached_external(candidate)
             return gate.merge(gate.evaluate(request, candidate, available_attractions), external)
 
-        evaluation = gate.merge(
-            gate.evaluate(request, current, available_attractions),
-            initial_external_evaluation or (
-                external_evaluator(current) if external_evaluator else None
-            ),
-        )
+        evaluation = evaluate(current)
         attempted = {item.issue_fingerprint or item.trigger_issue.fingerprint for item in current.repair_history}
         sandbox = PlanMutationSandbox(
             recalculate=self._recalculate,
@@ -1396,11 +1517,13 @@ class MultiAgentTripPlanner:
             hard_snapshot=lambda candidate: {
                 "hard_pass": self._hard_constraints_pass(candidate),
                 "hard_keys": sorted(self._hard_violation_keys(candidate)),
+                "excess": self._hard_violation_excess(candidate),
             },
             pipeline_mode="deterministic",
             run_id=(current.observability_trace.run_id if current.observability_trace else ""),
         )
-        for iteration in range(1, self.max_quality_repair_iterations + 1):
+        budget = self.max_quality_repair_iterations if max_iterations is None else max(0, max_iterations)
+        for iteration in range(1, budget + 1):
             trigger = self._next_quality_issue(evaluation, attempted)
             if trigger is None:
                 break
@@ -1491,7 +1614,7 @@ class MultiAgentTripPlanner:
                 if proposal is None:
                     continue
                 break
-        return self._finalize_quality_loop(current, request, available_attractions, evaluation, external_evaluator)
+        return self._finalize_quality_loop(current, request, available_attractions, evaluation, cached_external)
 
     def _finalize_quality_loop(
         self,
@@ -1538,500 +1661,6 @@ class MultiAgentTripPlanner:
         curate_user_warnings(current)
         return current
 
-    def _run_quality_loop_legacy(
-        self,
-        plan: TripPlan,
-        request: TripRequest,
-        available_attractions: Sequence[Attraction],
-        *,
-        hotel_candidates: Sequence[Hotel] = (),
-        external_evaluator: Callable[
-            [TripPlan], ExperienceEvaluation | None
-        ]
-        | None = None,
-        initial_external_evaluation: ExperienceEvaluation | None = None,
-    ) -> TripPlan:
-        """Run a bounded gate → directed repair → full revalidation loop."""
-
-        gate = getattr(self, "completeness_gate", None)
-        if gate is None:
-            gate = ItineraryCompletenessGate(self._identity())
-            self.completeness_gate = gate
-        controller = getattr(self, "repair_controller", None)
-        if controller is None:
-            controller = RepairController(self)
-            self.repair_controller = controller
-
-        current = deepcopy(plan)
-        self._recalculate(current, request)
-        for day in current.days:
-            if not day.primary_plan:
-                day.primary_plan = deepcopy(day.attractions)
-        external = initial_external_evaluation
-        if external is None and external_evaluator is not None:
-            external = external_evaluator(current)
-        evaluation = gate.merge(
-            gate.evaluate(request, current, available_attractions),
-            external,
-        )
-
-        attempted = {
-            item.issue_fingerprint or item.trigger_issue.fingerprint
-            for item in current.repair_history
-        }
-        for iteration in range(1, self.max_quality_repair_iterations + 1):
-            trigger = self._next_quality_issue(evaluation, attempted)
-            if trigger is None:
-                break
-            attempted.add(trigger.fingerprint)
-            before = deepcopy(current)
-            proposal = controller.propose(
-                current,
-                request,
-                available_attractions,
-                hotel_candidates,
-                trigger,
-            )
-            if proposal is None:
-                scope = RepairController.mutation_scope(
-                    trigger.repair_strategy,
-                    trigger.day,
-                )
-                current.repair_history.append(
-                    RepairIteration(
-                        iteration=iteration,
-                        trigger_issue=trigger,
-                        issue_fingerprint=trigger.fingerprint,
-                        selected_action="no_legal_repair_available",
-                        action_result="No supported mutation was available",
-                        accepted=False,
-                        rejection_reason=(
-                            "No repair could be produced from the existing "
-                            "candidate pool and deterministic planner actions"
-                        ),
-                        changes=[],
-                        constraint_pass_before=current.constraint_report.passed,
-                        constraint_pass_after=current.constraint_report.passed,
-                        quality_score_before=evaluation.overall_score,
-                        quality_score_after=evaluation.overall_score,
-                        issues_before=evaluation.issues,
-                        issues_after=evaluation.issues,
-                        mutation_scope=list(scope),
-                        actual_modified_fields=[],
-                        itinerary_before=self._itinerary_snapshot(current),
-                        itinerary_after=self._itinerary_snapshot(current),
-                        constraint_delta={"added": [], "removed": []},
-                        issue_delta={"added": [], "removed": [], "remaining": [
-                            item.fingerprint for item in evaluation.issues
-                        ]},
-                        rollback_reason="no_legal_repair_available",
-                    )
-                )
-                continue
-
-            candidate = proposal.plan
-            proposal_scope = (
-                proposal.mutation_scope
-                or RepairController.mutation_scope(
-                    trigger.repair_strategy,
-                    trigger.day,
-                )
-            )
-            proposal_fields = self._repair_modified_fields(before, candidate)
-            scope_violations = self._scope_violations(
-                proposal_fields,
-                proposal_scope,
-            )
-            if scope_violations:
-                reason = (
-                    "Mutation scope violation for "
-                    f"{trigger.repair_strategy.value}: "
-                    + ", ".join(scope_violations)
-                )
-                current.repair_history.append(
-                    RepairIteration(
-                        iteration=iteration,
-                        trigger_issue=trigger,
-                        issue_fingerprint=trigger.fingerprint,
-                        selected_action=proposal.action,
-                        action_result=(
-                            "rolled_back_before_recalculation"
-                        ),
-                        accepted=False,
-                        rejection_reason=reason,
-                        rollback_reason=reason,
-                        changes=self._quality_plan_changes(before, candidate),
-                        constraint_pass_before=self._hard_constraints_pass(before),
-                        constraint_pass_after=self._hard_constraints_pass(before),
-                        quality_score_before=evaluation.overall_score,
-                        quality_score_after=evaluation.overall_score,
-                        issues_before=evaluation.issues,
-                        issues_after=evaluation.issues,
-                        mutation_scope=list(proposal_scope),
-                        actual_modified_fields=proposal_fields,
-                        itinerary_before=self._itinerary_snapshot(before),
-                        itinerary_after=self._itinerary_snapshot(candidate),
-                        constraint_delta={"added": [], "removed": []},
-                        issue_delta={"added": [], "removed": [], "remaining": [
-                            item.fingerprint for item in evaluation.issues
-                        ]},
-                    )
-                )
-                break
-            proposal_evaluation = gate.evaluate(
-                request,
-                candidate,
-                available_attractions,
-            )
-            duplicate_introduced = any(
-                item.issue_type == "duplicate_visit"
-                for item in proposal_evaluation.issues
-            )
-            self._recalculate(candidate, request)
-            candidate = self.reviewer.review(candidate, request)
-            candidate_external = (
-                external_evaluator(candidate)
-                if external_evaluator is not None
-                else None
-            )
-            after_evaluation = gate.merge(
-                gate.evaluate(
-                    request,
-                    candidate,
-                    available_attractions,
-                ),
-                candidate_external,
-            )
-            changes = self._quality_plan_changes(before, candidate)
-            duplicate_after = any(
-                item.issue_type == "duplicate_visit" and item.is_blocking
-                for item in after_evaluation.issues
-            )
-            hard_pass_after = self._hard_constraints_pass(candidate)
-            improved = self._quality_rank(after_evaluation) > self._quality_rank(
-                evaluation
-            )
-            before_blocking = {
-                item.fingerprint
-                for item in evaluation.issues
-                if item.is_blocking
-            }
-            after_blocking = {
-                item.fingerprint
-                for item in after_evaluation.issues
-                if item.is_blocking
-            }
-            new_blocking = after_blocking - before_blocking
-            before_hard = self._hard_violation_keys(before)
-            after_hard = self._hard_violation_keys(candidate)
-            new_hard = after_hard - before_hard
-            before_high = {
-                item.fingerprint
-                for item in evaluation.issues
-                if item.severity in {"high", "critical"}
-            }
-            after_high = {
-                item.fingerprint
-                for item in after_evaluation.issues
-                if item.severity in {"high", "critical"}
-            }
-            new_high = after_high - before_high
-            significant_transport_regression = [
-                day_after.day_index + 1
-                for day_before, day_after in zip(before.days, candidate.days)
-                if day_before.attractions
-                and (
-                    day_after.daily_travel_minutes
-                    - day_before.daily_travel_minutes
-                    > max(60, day_before.daily_travel_minutes * 0.25)
-                )
-            ]
-            soft_metric_regressions = []
-            if not trigger.is_blocking:
-                strict_non_mutating = (
-                    trigger.repair_strategy
-                    == RepairStrategy.ADD_WEATHER_BACKUP
-                )
-                for day_before, day_after in zip(before.days, candidate.days):
-                    if (
-                        day_after.daily_walking_distance_km
-                        > day_before.daily_walking_distance_km
-                        + (0.01 if strict_non_mutating else 0.5)
-                    ):
-                        soft_metric_regressions.append(
-                            f"Day {day_after.day_index + 1} walking increased"
-                        )
-                    if (
-                        day_after.daily_travel_minutes
-                        > day_before.daily_travel_minutes
-                        + (0 if strict_non_mutating else 15)
-                    ):
-                        soft_metric_regressions.append(
-                            f"Day {day_after.day_index + 1} transport increased"
-                        )
-            utilization_regression = False
-            if (
-                trigger.repair_strategy
-                not in {
-                    RepairStrategy.RECLUSTER_ROUTE,
-                    RepairStrategy.RESELECT_HOTEL,
-                }
-                and trigger.day
-                and trigger.day <= len(candidate.days)
-            ):
-                utilization_regression = (
-                    candidate.days[trigger.day - 1].day_utilization_score
-                    + 0.1
-                    < before.days[trigger.day - 1].day_utilization_score
-                )
-            target_improved = self._target_issue_improved(
-                trigger,
-                after_evaluation,
-            )
-            accepted = (
-                hard_pass_after
-                and not duplicate_introduced
-                and not duplicate_after
-                and not new_blocking
-                and not new_hard
-                and not new_high
-                and not significant_transport_regression
-                and not utilization_regression
-                and not soft_metric_regressions
-                and target_improved
-                and improved
-            )
-            rejection_reason = ""
-            if not hard_pass_after:
-                rejection_reason = (
-                    "Repair rejected because full hard-constraint validation failed"
-                )
-            elif duplicate_introduced or duplicate_after:
-                rejection_reason = (
-                    "Repair rejected because it attempted to violate the "
-                    "duplicate invariant"
-                )
-            elif new_blocking:
-                rejection_reason = (
-                    "Repair rejected because it introduced new blocking "
-                    "issues: "
-                    + ", ".join(
-                        fingerprint
-                        for fingerprint in sorted(new_blocking)
-                    )
-                )
-            elif new_hard:
-                rejection_reason = (
-                    "Repair introduced hard constraint violations: "
-                    + ", ".join(sorted(new_hard))
-                )
-            elif new_high:
-                rejection_reason = (
-                    "Repair introduced new high/critical issues: "
-                    + ", ".join(sorted(new_high))
-                )
-            elif significant_transport_regression:
-                rejection_reason = (
-                    "Repair significantly increased transport on Day "
-                    + ", Day ".join(
-                        str(day) for day in significant_transport_regression
-                    )
-                )
-            elif utilization_regression:
-                rejection_reason = (
-                    f"Repair reduced target Day {trigger.day} utilization"
-                )
-            elif soft_metric_regressions:
-                rejection_reason = (
-                    "Soft-issue repair degraded primary metrics: "
-                    + "; ".join(soft_metric_regressions)
-                )
-            elif not target_improved:
-                rejection_reason = (
-                    "Repair did not improve its target issue"
-                )
-            elif not improved:
-                rejection_reason = (
-                    "Repair did not improve overall quality"
-                )
-
-            record = RepairIteration(
-                iteration=iteration,
-                trigger_issue=trigger,
-                issue_fingerprint=trigger.fingerprint,
-                selected_action=proposal.action,
-                action_result=(
-                    "accepted; plan revalidated"
-                    if accepted
-                    else "rejected transactionally; previous best plan retained"
-                ),
-                accepted=accepted,
-                rejection_reason=rejection_reason,
-                changes=changes,
-                constraint_pass_before=before.constraint_report.passed,
-                constraint_pass_after=hard_pass_after,
-                quality_score_before=evaluation.overall_score,
-                quality_score_after=after_evaluation.overall_score,
-                issues_before=evaluation.issues,
-                issues_after=after_evaluation.issues,
-                mutation_scope=list(proposal_scope),
-                actual_modified_fields=proposal_fields,
-                itinerary_before=self._itinerary_snapshot(before),
-                itinerary_after=self._itinerary_snapshot(candidate),
-                constraint_delta={
-                    "added": sorted(after_hard - before_hard),
-                    "removed": sorted(before_hard - after_hard),
-                },
-                issue_delta=self._issue_delta(
-                    evaluation,
-                    after_evaluation,
-                ),
-                rollback_reason=rejection_reason if not accepted else "",
-            )
-            # The handler only touched ``candidate`` (RepairController deep
-            # copies its input).  Record the same candidate transaction in a
-            # versioned envelope before swapping the formal current plan.
-            attempt = RepairAttempt(
-                attempt_id=uuid4().hex,
-                base_plan_version=current.plan_version.version,
-                issue_fingerprint=trigger.fingerprint,
-                issue_type=trigger.issue_type,
-                repair_strategy=trigger.repair_strategy,
-                status=(
-                    RepairAttemptStatus.COMMITTED
-                    if accepted
-                    else RepairAttemptStatus.ROLLED_BACK
-                ),
-                validation_before={
-                    "hard_pass": self._hard_constraints_pass(before),
-                    "hard_keys": sorted(self._hard_violation_keys(before)),
-                },
-                validation_after={
-                    "hard_pass": hard_pass_after,
-                    "hard_keys": sorted(after_hard),
-                },
-                quality_before={"score": evaluation.overall_score},
-                quality_after={"score": after_evaluation.overall_score},
-                quality_delta=round(
-                    after_evaluation.overall_score - evaluation.overall_score, 4
-                ),
-                plan_diff=PlanMutationSandbox.diff(before, candidate),
-                rollback_reason=rejection_reason if not accepted else "",
-                committed_plan_version=(
-                    current.plan_version.version + 1 if accepted else None
-                ),
-            )
-            if accepted:
-                for day in candidate.days:
-                    if f"days[{day.day_index}].attractions" in proposal_fields:
-                        day.primary_plan = deepcopy(day.attractions)
-                candidate.repair_history = [*current.repair_history, record]
-                candidate.repair_attempts = [*current.repair_attempts, attempt]
-                candidate.plan_version = PlanVersionMetadata(
-                    version=current.plan_version.version + 1,
-                    parent_version=current.plan_version.version,
-                    mutation_source="repair_controller",
-                    mutation_action=trigger.repair_strategy.value,
-                    mutation_reason=trigger.issue_type,
-                    attempt_id=attempt.attempt_id,
-                    created_at=datetime.now(timezone.utc).isoformat(),
-                )
-                candidate.planning_trace.append(
-                    PlanningTraceItem(
-                        iteration=iteration,
-                        role="QualityRepairController",
-                        action=proposal.action,
-                        reason=trigger.evidence,
-                        score_before=evaluation.overall_score / 10,
-                        score_after=after_evaluation.overall_score / 10,
-                    )
-                )
-                current = candidate
-                evaluation = after_evaluation
-            else:
-                current.repair_history.append(record)
-                current.repair_attempts.append(attempt)
-                # The fingerprint prevents this failed action from being retried.
-                break
-
-        final_external = (
-            external_evaluator(current)
-            if external_evaluator is not None
-            else external
-        )
-        final_evaluation = gate.merge(
-            gate.evaluate(request, current, available_attractions),
-            final_external,
-        )
-        hard_pass = self._hard_constraints_pass(current)
-        current.quality_evaluation = final_evaluation
-        unresolved = []
-        for issue in final_evaluation.issues:
-            if issue.resolution_status in {"resolved", "mitigated"}:
-                continue
-            issue.resolution_status = (
-                "unresolved_blocking"
-                if issue.is_blocking
-                else "unresolved_non_blocking"
-            )
-            unresolved.append(issue)
-        blocking = [issue for issue in unresolved if issue.is_blocking]
-        warnings = [issue for issue in unresolved if not issue.is_blocking]
-        current.quality_gate_passed = hard_pass and not blocking
-        current.unresolved_quality_issues = unresolved
-        current.unresolved_blocking_issues = blocking
-        current.unresolved_non_blocking_issues = warnings
-        current.best_effort = bool(unresolved)
-        for day in current.days:
-            if not day.primary_plan:
-                day.primary_plan = deepcopy(day.attractions)
-        current.suggested_alternatives = sorted(
-            set(
-                [
-                    *current.suggested_alternatives,
-                    *[
-                        day.weather_warning
-                        for day in current.days
-                        if day.weather_warning
-                    ],
-                    *[f"可选改进：{item.evidence}" for item in warnings],
-                    *[
-                        f"需处理后执行：{item.evidence}；建议动作 {item.repair_strategy.value}"
-                        for item in blocking
-                    ],
-                ]
-            )
-        )
-        if current.quality_gate_passed:
-            if current.failure_reason and hard_pass:
-                current.failure_reason = None
-            current.degraded_reason = None
-            current.risk_warnings = sorted(
-                set([*current.risk_warnings, *[item.evidence for item in warnings]])
-            )
-        else:
-            unresolved_text = "; ".join(
-                f"{item.issue_type}"
-                + (f"(Day {item.day})" if item.day else "")
-                + f": {item.evidence}"
-                for item in blocking
-            )
-            current.failure_reason = (
-                "Quality gate unresolved after bounded repair: "
-                + (unresolved_text or "hard constraint validation failed")
-            )
-            current.degraded_reason = current.failure_reason
-            current.risk_warnings = sorted(
-                set(
-                    [
-                        *current.risk_warnings,
-                        "质量门未通过，当前结果为 degraded，不应视为完整可执行方案。",
-                    ]
-                )
-            )
-        curate_user_warnings(current)
-        return current
-
     @staticmethod
     def _hard_constraints_pass(plan: TripPlan) -> bool:
         return plan.validation_result.valid and not any(
@@ -2075,15 +1704,6 @@ class MultiAgentTripPlanner:
             ),
             default=None,
         )
-
-    @staticmethod
-    def _quality_rank(evaluation: ExperienceEvaluation) -> tuple:
-        blocking = sum(item.is_blocking for item in evaluation.issues)
-        unresolved = sum(
-            item.resolution_status not in {"resolved", "mitigated"}
-            for item in evaluation.issues
-        )
-        return (-blocking, -unresolved, evaluation.overall_score)
 
     @staticmethod
     def _quality_plan_changes(
@@ -2236,21 +1856,30 @@ class MultiAgentTripPlanner:
         ]
 
     @staticmethod
+    def _hard_violation_excess(plan: TripPlan) -> dict:
+        result = {}
+        for item in plan.validation_result.violations:
+            if item.severity != "hard" or item.type not in {"WALKING_LIMIT", "WALKING_DURATION", "BUDGET_LIMIT"}:
+                continue
+            if isinstance(item.actual, (int, float)) and isinstance(item.expected, (int, float)):
+                result[f"{item.type}:{item.day}:{item.poi_name}"] = max(0, item.actual - item.expected)
+        return result
+
+    @staticmethod
     def _hard_violation_keys(plan: TripPlan) -> set[str]:
         result = {
-            (
-                f"validation:{item.type}:{item.day}:{item.poi_name}:"
-                f"{item.message}"
-            )
+            f"validation:{item.type}:{item.day}:{item.poi_name}"
             for item in plan.validation_result.violations
             if item.severity == "hard"
         }
-        result.update(
-            f"legacy:{item.name}:{item.message}"
-            for item in plan.constraint_report.items
-            if not item.passed
-            and item.severity.lower() in {"blocker", "hard", "critical"}
-        )
+        for item in plan.constraint_report.items:
+            if item.passed or item.severity.lower() not in {
+                "blocker", "hard", "critical"
+            }:
+                continue
+            day_match = re.search(r"(?:Day|第)\s*(\d+)", item.message)
+            day_scope = day_match.group(1) if day_match else "all"
+            result.add(f"legacy:{item.name}:{day_scope}")
         return result
 
     @staticmethod
@@ -2305,7 +1934,7 @@ class MultiAgentTripPlanner:
         """
 
         canonical_specialists = self._identity().deduplicate(
-            specialist_candidates,
+            [item for item in specialist_candidates if venue_kind(item.name, item.category or "") == "attraction"],
             must_visit=request.must_visit,
         )
         unique = {
@@ -2339,6 +1968,19 @@ class MultiAgentTripPlanner:
         for recalled in self.poi_collector.collect_attractions(recall_request):
             self._identity().assign_visit_keys([recalled])
             key = recalled.visit_key
+            # A model-only coordinate is not a second venue. Prefer the map
+            # record for the same name near the model's approximate location.
+            unverified_keys = [
+                existing_key for existing_key, item in unique.items()
+                if not item.poi_id
+                and normalize_place_name(item.name) == normalize_place_name(recalled.name)
+                and haversine_meters(item.location, recalled.location) < 3000
+            ]
+            for existing_key in unverified_keys:
+                unverified = unique.pop(existing_key)
+                recalled.recall_sources = sorted(set([
+                    *recalled.recall_sources, *unverified.recall_sources
+                ]))
             existing = unique.get(key)
             if existing is None:
                 unique[key] = recalled
@@ -2628,6 +2270,7 @@ class MultiAgentTripPlanner:
         day.partial_day_reason = reason
 
     def _recalculate_day(self, day: DayPlan, request: TripRequest) -> None:
+        prepare_meals(day, request, getattr(self, "amap_service", None))
         day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
         self._schedule_day_opening_hours(day, request)
         self._update_day_metrics(
@@ -2921,15 +2564,6 @@ class MultiAgentTripPlanner:
                     f"Budget exceeds the limit; removed optional attraction {attraction.name}",
                 )
 
-            hotel = next((day.hotel for day in plan.days if day.hotel), None)
-            if hotel and hotel.estimated_cost > 200:
-                old_cost = hotel.estimated_cost
-                hotel.estimated_cost = 350 if old_cost > 350 else 200
-                return (
-                    "downgrade_hotel",
-                    f"Budget exceeds the limit; reduced nightly hotel estimate from {old_cost} to {hotel.estimated_cost}",
-                )
-
             meals = [meal for day in plan.days for meal in day.meals if meal.estimated_cost > 20]
             if meals:
                 for meal in meals:
@@ -3109,7 +2743,7 @@ class MultiAgentTripPlanner:
                     and len(day.attractions) >= 2
                 )
                 or len(day.attractions)
-                >= SpatialItineraryPlanner.max_attractions_per_day
+                >= get_pace_profile(request.pace).attractions_per_day
                 or (
                     len(day.attractions) == 1
                     and day.daily_travel_minutes
@@ -3143,6 +2777,8 @@ class MultiAgentTripPlanner:
                 )
             )
             for candidate in candidates:
+                if len(day.attractions) >= get_pace_profile(request.pace).attractions_per_day:
+                    break
                 if self._try_add_attraction(
                     day, candidate, request, available_attractions
                 ):
@@ -3233,6 +2869,9 @@ class MultiAgentTripPlanner:
         request: TripRequest,
         candidate_pool: Sequence[Attraction] = (),
     ) -> bool:
+        is_required = any(place_names_match(name, attraction.name) for name in request.must_visit)
+        if not is_required and len(target_day.attractions) >= get_pace_profile(request.pace).attractions_per_day:
+            return False
         decision = self._candidate_policy().evaluate(
             attraction,
             pool=candidate_pool or [attraction],
@@ -3265,7 +2904,7 @@ class MultiAgentTripPlanner:
             return False
         if (
             request.max_daily_walk_km is not None
-            and candidate.daily_walking_distance_km > request.max_daily_walk_km
+            and candidate.daily_walking_distance_km + sum(item.estimated_internal_walking_km for item in candidate.attractions) > request.max_daily_walk_km
         ):
             attraction.selection_trace.append(
                 {
@@ -3446,12 +3085,17 @@ class MultiAgentTripPlanner:
             day.schedule_blocks,
             key=lambda block: _clock_minutes(block.start_time, 24 * 60),
         )
-        for attraction in day.attractions:
+        for attraction in schedule_stops(day):
             incoming = incoming_by_destination.get(attraction.name)
             arrival = current + (incoming.duration_minutes if incoming else 0)
             if incoming is not None:
                 incoming.planned_departure_time = _format_clock(current)
                 incoming.planned_arrival_time = _format_clock(arrival)
+            if isinstance(attraction, Meal):
+                attraction.planned_arrival_time = _format_clock(arrival)
+                current = arrival + attraction.duration_minutes
+                attraction.planned_departure_time = _format_clock(current)
+                continue
             opening = _clock_minutes(attraction.opening_time, 0)
             start = max(arrival, opening) if attraction.opening_time else arrival
             departure = start + attraction.visit_duration
@@ -3487,18 +3131,9 @@ class MultiAgentTripPlanner:
                 current = max(current, block_end)
         # Meals are placed flexibly between visits, but still consume real
         # availability and therefore must move the computed return time.
-        if (
-            day.attractions
-            and day.meals
-            and not any(
-                block.reason == "rest"
-                for block in day.schedule_blocks
-            )
-        ):
-            current += min(60, get_pace_profile(request.pace).daily_buffer_minutes)
         if day.route_segments and day.attractions:
             return_segment = day.route_segments[-1]
-            if return_segment.origin == day.attractions[-1].name:
+            if day.hotel and return_segment.destination == day.hotel.name:
                 return_segment.planned_departure_time = _format_clock(current)
                 current += return_segment.duration_minutes
                 return_segment.planned_arrival_time = _format_clock(current)
@@ -3545,9 +3180,8 @@ class MultiAgentTripPlanner:
         )
         # Meal time is explicitly exposed and is already included in the
         # profile buffer, preserving the single-counted duration invariant.
-        day.daily_meal_minutes = (
-            min(60, day.daily_buffer_minutes) if day.meals else 0
-        )
+        day.daily_meal_minutes = sum(meal.duration_minutes for meal in day.meals)
+        day.daily_buffer_minutes += day.daily_meal_minutes
         day.daily_duration_minutes = (
             day.daily_visit_minutes
             + day.daily_travel_minutes
@@ -3601,9 +3235,8 @@ class MultiAgentTripPlanner:
         return (
             sum(attr.ticket_price for attr in day.attractions)
             + sum(meal.estimated_cost for meal in day.meals)
-            + (day.hotel.estimated_cost if day.hotel else 0)
-            + 30
-            + int(day.daily_distance_km * 3)
+            + (day.hotel.estimated_cost if day.hotel else 0) * day.accommodation_nights
+            + day.daily_transport_cost
         )
 
     def _build_suggestions(self, request: TripRequest, evidence: List) -> str:

@@ -10,6 +10,7 @@ from app.models.agent_outputs import (
 from app.agents.trip_planner_agent import MultiAgentTripPlanner
 from app.models.schemas import (
     Attraction,
+    ConstraintItem,
     ConstraintReport,
     Hotel,
     Location,
@@ -29,11 +30,16 @@ class _PlanBuilder:
         self.rag = _Rag()
         self.constraints_pass = constraints_pass
         self.repairs = 0
+        self.defer_refinement = None
 
     def build_rag_query(self, request):
         return request.city
 
-    def build_plan_from_inputs(self, request, attractions, hotel, weather, evidence):
+    def build_plan_from_inputs(
+        self, request, attractions, hotel, weather, evidence,
+        *, defer_refinement=False,
+    ):
+        self.defer_refinement = defer_refinement
         return TripPlan(
             city=request.city,
             start_date=request.start_date,
@@ -63,7 +69,11 @@ class _Specialist:
 
 
 class _PlannerAgent:
-    def review_plan(self, request, plan, weather, evidence):
+    def __init__(self):
+        self.repair_budget = None
+
+    def review_plan(self, request, plan, weather, evidence, *, repair_budget=None):
+        self.repair_budget = repair_budget
         plan.overall_suggestions = "reviewed"
         return plan
 
@@ -123,6 +133,8 @@ class LangGraphTripWorkflowTest(unittest.TestCase):
         self.assertEqual(state.values["intent"]["daily_start_time"], "08:30")
         self.assertEqual(state.values["intent"]["travelers"], ["senior"])
         self.assertEqual(state.values["intent"]["hard_constraints"], ["no stairs"])
+        self.assertTrue(workflow.orchestrator.plan_builder.defer_refinement)
+        self.assertEqual(workflow.orchestrator.planner_agent.repair_budget, workflow.max_repair_attempts)
 
         resumed_plan, resumed_summary = workflow.resume("intent-priority")
         self.assertEqual(resumed_plan.city, request.city)
@@ -149,8 +161,44 @@ class LangGraphTripWorkflowTest(unittest.TestCase):
         plan, summary = workflow.run(_request())
 
         self.assertFalse(plan.constraint_report.passed)
+        self.assertFalse(plan.quality_gate_passed)
+        self.assertTrue(plan.unresolved_blocking_issues)
+        self.assertTrue(plan.degraded_reason)
         self.assertEqual(orchestrator.plan_builder.repairs, workflow.max_repair_attempts)
         self.assertEqual(summary.workflow_mode, "langgraph")
+
+    def test_hard_violation_identity_ignores_changing_measurement_text(self):
+        before = TripPlan(
+            city="北京", start_date="2026-08-01", end_date="2026-08-01",
+            days=[], overall_suggestions="",
+            constraint_report=ConstraintReport(items=[ConstraintItem(
+                name="Constraint:WALKING_LIMIT", passed=False,
+                severity="blocker", message="Day1步行约9.4km，超过8.0km",
+            )]),
+        )
+        after = before.model_copy(deep=True)
+        after.constraint_report.items[0].message = "Day1步行约8.1km，超过8.0km"
+
+        self.assertEqual(
+            MultiAgentTripPlanner._hard_violation_keys(before),
+            MultiAgentTripPlanner._hard_violation_keys(after),
+        )
+
+    def test_finalize_deduplicates_walking_failure_across_reports(self):
+        workflow = self._workflow(_orchestrator())
+        reason = "Day1步行约10.5km，超过8.0km"
+        plan = TripPlan.model_validate({
+            "city": "北京", "start_date": "2026-10-01", "end_date": "2026-10-01",
+            "days": [], "overall_suggestions": "", "failure_reason": reason + "; " + reason,
+            "validation_result": {"valid": False, "violations": [{
+                "type": "WALKING_LIMIT", "constraint_type": "walking_distance", "day": 1,
+                "message": reason, "actual": 10.5, "expected": 8, "severity": "hard"}]},
+            "constraint_report": {"passed": False, "items": [{
+                "name": "Constraint:WALKING_LIMIT", "passed": False, "severity": "blocker", "message": reason}]},
+        })
+        result = workflow.finalize({"deterministic_plan": plan.model_dump(mode="json"), "run_id": "dedup"})
+        self.assertEqual(result["final_plan"]["failure_reason"], reason)
+        self.assertFalse(result["final_plan"]["quality_gate_passed"])
 
     def test_thin_specialist_result_is_expanded_before_multiday_planning(self):
         plan_builder = MultiAgentTripPlanner()

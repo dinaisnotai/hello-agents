@@ -108,14 +108,22 @@ class PlannerAgent:
         *,
         available_attractions=None,
         hotel_candidates=None,
+        repair_budget: int | None = None,
     ) -> TripPlan:
         """Apply the optional LLM review to an already-built deterministic plan."""
 
         if self.agent is None:
             self.last_warning = "LLM 未启用，已跳过 PlannerAgent 软审查"
+            if hasattr(self.plan_builder, "run_quality_loop"):
+                plan = self.plan_builder.run_quality_loop(
+                    plan, request, available_attractions or [],
+                    hotel_candidates=hotel_candidates or [], max_iterations=repair_budget,
+                )
             curate_user_warnings(plan)
             return plan
 
+        quality_checked = False
+        review_contract_errors: list[str] = []
         try:
             review_payload = self._build_review_payload(
                 request,
@@ -144,6 +152,7 @@ class PlannerAgent:
                     raw_result,
                     ExperienceEvaluation,
                 )
+                evaluation = self._ground_evaluation(evaluation, plan, evidence, available_attractions or [])
                 for issue in evaluation.issues:
                     issue.source = "llm"
                 evaluation.source = "llm"
@@ -170,9 +179,12 @@ class PlannerAgent:
                         hotel_candidates=hotel_candidates or [],
                         external_evaluator=evaluator,
                         initial_external_evaluation=evaluation,
+                        max_iterations=repair_budget,
                     )
+                    quality_checked = True
                 else:
                     plan.quality_evaluation = evaluation
+                    review_contract_errors.extend(evaluation.contract_errors)
                     plan.quality_gate_passed = evaluation.passed
                     plan.unresolved_quality_issues = [
                         item
@@ -209,6 +221,7 @@ class PlannerAgent:
                         }
                     )
                     plan.quality_evaluation = evaluation
+                    review_contract_errors.extend(evaluation.contract_errors)
                     plan.risk_warnings = sorted(
                         set([*plan.risk_warnings, *evaluation.contract_errors])
                     )
@@ -227,6 +240,20 @@ class PlannerAgent:
             # The deterministic plan is already complete. LLM review failure
             # must not turn a valid itinerary into an API failure.
             self.last_warning = f"PlannerAgent 软审查失败：{exc}"
+        if not quality_checked and hasattr(self.plan_builder, "run_quality_loop"):
+            plan = self.plan_builder.run_quality_loop(
+                plan, request, available_attractions or [],
+                hotel_candidates=hotel_candidates or [], max_iterations=repair_budget,
+            )
+        if review_contract_errors:
+            if plan.quality_evaluation is None:
+                plan.quality_evaluation = ExperienceEvaluation(
+                    **{"pass": True}, source="deterministic"
+                )
+            plan.quality_evaluation.contract_errors = list(dict.fromkeys([
+                *plan.quality_evaluation.contract_errors,
+                *review_contract_errors,
+            ]))
         if settings.enable_context_governance:
             # Final output is deterministic today; retain its governed view so
             # an optional future explainer cannot receive L2 internals.
@@ -290,9 +317,30 @@ class PlannerAgent:
                     ],
                 }
             )
+        evaluation = self._ground_evaluation(evaluation, plan, evidence, available_attractions or [])
         evaluation.source = "llm"
         for issue in evaluation.issues:
             issue.source = "llm"
+        return evaluation
+
+    @staticmethod
+    def _ground_evaluation(evaluation, plan, evidence, candidates):
+        """Unknown citations and POI keys cannot authorize a repair."""
+        sources = {item.source for item in evidence}
+        keys = {
+            item.visit_key or item.poi_id or item.name
+            for item in [*candidates, *[poi for day in plan.days for poi in day.attractions]]
+        }
+        accepted = []
+        for issue in evaluation.issues:
+            if (issue.day is not None and issue.day > len(plan.days)) or (
+                set(issue.evidence_sources) - sources
+            ) or (set(issue.affected_visit_keys) - keys):
+                evaluation.contract_errors.append(f"Unverifiable review issue: {issue.issue_type}")
+                continue
+            accepted.append(issue)
+        evaluation.issues = accepted
+        evaluation.passed = not any(item.is_blocking for item in accepted)
         return evaluation
 
     def _build_review_payload(
@@ -416,94 +464,6 @@ class PlannerAgent:
             "evidence": payload.get("evidence", []),
             "knowledge_summary": payload.get("knowledge_summary", []),
             "context_governance": governed.model_dump(mode="json", exclude={"payload"}),
-        }
-
-        assigned = {
-            item.visit_key or item.poi_id or item.name
-            for day in plan.days
-            for item in day.attractions
-        }
-        remaining = [
-            item
-            for item in available_attractions
-            if (item.visit_key or item.poi_id or item.name) not in assigned
-        ]
-        gate = getattr(
-            self.plan_builder,
-            "completeness_gate",
-            ItineraryCompletenessGate(),
-        )
-        return {
-            "request": request.model_dump(mode="json"),
-            "plan": plan.model_dump(
-                mode="json",
-                exclude={"observability_trace"},
-            ),
-            "hotels": [
-                day.hotel.model_dump(mode="json")
-                for day in plan.days
-                if day.hotel is not None
-            ],
-            "observability": {
-                "candidate_pois": (
-                    [
-                        item.model_dump(mode="json")
-                        for item in plan.observability_trace.candidate_pois
-                    ]
-                    if plan.observability_trace
-                    else []
-                ),
-                "validation_result": (
-                    plan.observability_trace.validation_result.model_dump(
-                        mode="json"
-                    )
-                    if plan.observability_trace
-                    else {}
-                ),
-            },
-            "weather_risks": weather_result.risk_summary,
-            "review_context": {
-                "previous_issues": [
-                    item.model_dump(mode="json")
-                    for repair in plan.repair_history
-                    for item in repair.issues_before
-                ],
-                "previous_attempts": [
-                    {
-                        "issue_fingerprint": repair.issue_fingerprint,
-                        "repair_action": repair.selected_action,
-                        "repair_result": repair.action_result,
-                        "accepted": repair.accepted,
-                        "failure_reason": repair.rejection_reason,
-                    }
-                    for repair in plan.repair_history
-                ],
-                "available_candidate_categories": sorted(
-                    {
-                        category
-                        for item in remaining
-                        for category in (
-                            item.categories or [item.category or "general"]
-                        )
-                    }
-                ),
-                "indoor_candidates_count": sum(
-                    gate._is_indoor(item) for item in remaining
-                ),
-                "remaining_candidate_count": len(remaining),
-                "instruction": (
-                    "Do not repeat a failed issue fingerprint and repair "
-                    "strategy unless the candidate evidence changed."
-                ),
-            },
-            "evidence": [
-                {
-                    "title": item.title,
-                    "source": item.source,
-                    "snippet": item.snippet,
-                }
-                for item in evidence
-            ],
         }
 
     @staticmethod

@@ -130,7 +130,7 @@ def estimate_leg(
     if distance < 1_500 or transportation == "步行":
         return LegEstimate("walking", walking_minutes, distance, 0)
 
-    if any(label in transportation for label in ("公共", "公交", "地铁", "transit")):
+    if any(label in transportation for label in ("公共", "公交", "地铁", "transit")) or ("混合" in transportation and distance < 10_000):
         # Long regional legs (for example central Beijing to Badaling) use
         # express rail/coach speeds rather than inner-city bus speed.
         transit_speed = 800.0 if distance > 30_000 else 333.0
@@ -153,7 +153,6 @@ def estimate_leg(
 class SpatialItineraryPlanner:
     """Select high-priority POIs, cluster them by day, then order each day."""
 
-    max_attractions_per_day = 5
     min_utilization_ratio = 0.70
     target_utilization_ratio = 0.90
     remote_travel_threshold_minutes = 120
@@ -287,7 +286,7 @@ class SpatialItineraryPlanner:
         core_quota = (
             0
             if deep_exploration
-            else min(travel_days, len(core_candidates))
+            else min(travel_days, len(core_candidates), max(0, selection_limit - len(selected)))
         )
         selected.extend(core_candidates[:core_quota])
         for item in core_candidates[:core_quota]:
@@ -769,11 +768,11 @@ class SpatialItineraryPlanner:
             primary_candidates = [
                 attraction
                 for area, attraction in remaining
-                if area == primary_area
+                if area == primary_area and id(attraction) not in assigned_ids
             ]
             while (
                 primary_candidates
-                and len(groups[day_index]) < self.max_attractions_per_day
+                and len(groups[day_index]) < profile.attractions_per_day
             ):
                 current_visit = sum(
                     item.visit_duration for item in groups[day_index]
@@ -830,7 +829,7 @@ class SpatialItineraryPlanner:
                 if len(proposed_areas) > 2 and not is_required:
                     continue
                 if (
-                    len(group) >= self.max_attractions_per_day
+                    len(group) >= profile.attractions_per_day
                     and not is_required
                 ):
                     continue

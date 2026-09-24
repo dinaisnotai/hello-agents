@@ -39,13 +39,17 @@ class HotelAgent:
                 enable_tool_calling=True,
             )
 
-    def run(self, request: TripRequest) -> HotelSearchResult:
+    def run(self, request: TripRequest, *, evidence=()) -> HotelSearchResult:
         agent_input = {
             "city": request.city,
             "hotel_area": request.hotel_area,
             "accommodation": request.accommodation,
             "budget_limit": request.budget_limit,
             "travel_days": request.travel_days,
+            "must_visit": request.must_visit,
+            "max_daily_walk_km": request.max_daily_walk_km,
+            "requirements": request.free_text_input,
+            "guide_evidence": [item.model_dump(mode="json") for item in evidence[:4]],
         }
         if self.agent is not None:
             try:
@@ -56,10 +60,13 @@ class HotelAgent:
                         max_tool_iterations=specialist_max_tool_iterations(),
                     )
                 result = parse_agent_result(raw_result, HotelSearchResult)
-                if not result.candidates:
-                    raise ValueError("酒店 Agent 没有返回候选酒店")
-                if result.recommended_hotel is None:
-                    result.recommended_hotel = result.candidates[0]
+                from .trip_planner_agent import POICollector
+
+                queries = result.search_keywords or [item.name for item in result.candidates[:3]]
+                result.candidates = POICollector(self.search_tool.amap_service).collect_hotels(
+                    request, additional_keywords=queries,
+                )
+                result.recommended_hotel = result.candidates[0]
                 result.used_fallback = False
                 return result
             except Exception as exc:

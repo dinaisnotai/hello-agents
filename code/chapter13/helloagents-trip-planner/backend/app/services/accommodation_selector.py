@@ -7,6 +7,7 @@ from typing import Sequence
 
 from ..models.schemas import Attraction, Hotel, TripRequest
 from .spatial_planner import estimate_leg
+from .trip_cost_service import stay_nights
 
 
 class AccommodationSelector:
@@ -24,11 +25,14 @@ class AccommodationSelector:
                 type=request.accommodation,
             )
 
+        requested_tier = self._tier(request.accommodation)
+        matching = [hotel for hotel in candidates if self._tier(hotel.type) == requested_tier and requested_tier != "unspecified"]
+        affordable = [hotel for hotel in matching if request.budget_limit is None or hotel.estimated_cost * stay_nights(request) * request.room_count <= request.budget_limit * 0.5]
         scored = [
             self.score_candidate(request, deepcopy(hotel), attractions)
-            for hotel in candidates
+            for hotel in (affordable or candidates)
         ]
-        return max(
+        selected = max(
             scored,
             key=lambda hotel: (
                 hotel.selection_score,
@@ -36,6 +40,9 @@ class AccommodationSelector:
                 hotel.name,
             ),
         )
+        if requested_tier != "unspecified" and self._tier(selected.type) != requested_tier:
+            selected.price_note += "；未确认符合所选住宿档次，请核实后预订"
+        return selected
 
     def score_candidate(
         self,
@@ -109,7 +116,7 @@ class AccommodationSelector:
     def _budget_score(request: TripRequest, hotel: Hotel) -> float:
         if request.budget_limit is None:
             return max(0.0, 25.0 - hotel.estimated_cost / 100)
-        hotel_total = hotel.estimated_cost * max(1, request.travel_days)
+        hotel_total = hotel.estimated_cost * stay_nights(request) * request.room_count
         allocation = request.budget_limit * 0.5
         if hotel_total <= allocation:
             return 30.0
@@ -119,7 +126,7 @@ class AccommodationSelector:
     @classmethod
     def _type_score(cls, requested: str, hotel: Hotel) -> float:
         requested_tier = cls._tier(requested)
-        candidate_tier = cls._tier(f"{hotel.type} {hotel.name}")
+        candidate_tier = cls._tier(hotel.type)
         if requested_tier == "unspecified" or candidate_tier == "unspecified":
             return 0.0
         return 20.0 if requested_tier == candidate_tier else -20.0
@@ -131,8 +138,8 @@ class AccommodationSelector:
             return "homestay"
         if any(term in value for term in ("豪华", "奢华", "luxury", "五星", "5-star")):
             return "luxury"
-        if any(term in value for term in ("舒适", "comfortable", "comfort")):
+        if any(term in value for term in ("舒适", "高档型", "comfortable", "comfort")):
             return "comfortable"
-        if any(term in value for term in ("经济", "budget", "economy", "hostel")):
+        if any(term in value for term in ("经济", "旅馆招待所", "budget", "economy", "hostel")):
             return "budget"
         return "unspecified"

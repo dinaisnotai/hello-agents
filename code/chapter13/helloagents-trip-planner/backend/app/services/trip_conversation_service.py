@@ -11,10 +11,7 @@ from typing import Callable, Iterable, Optional
 
 from hello_agents import HelloAgentsLLM, SimpleAgent
 
-from ..agents.multi_agent_orchestrator import (
-    MultiAgentOrchestrator,
-    get_multi_agent_orchestrator,
-)
+from .planner_service import get_planner
 from ..agents.agent_utils import parse_agent_result, run_stateless_agent
 from ..agents.prompts import CONVERSATION_PATCH_PROMPT
 from ..models.conversation import TripRequestPatch, TripSessionDetail
@@ -196,13 +193,13 @@ class TripConversationService:
     def __init__(
         self,
         repository: Optional[TripSessionRepository] = None,
-        planner: Optional[MultiAgentOrchestrator] = None,
+        planner=None,
         patch_interpreter: Optional[
             Callable[[TripRequest, str], TripRequestPatch]
         ] = None,
     ):
         self.repository = repository or TripSessionRepository()
-        self.planner = planner or get_multi_agent_orchestrator()
+        self.planner = planner or get_planner()
         interpreter = patch_interpreter or ConversationPatchInterpreter().interpret
         self.patch_interpreter = interpreter
 

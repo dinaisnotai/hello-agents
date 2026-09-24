@@ -13,6 +13,8 @@ from typing import Iterable
 
 from ..models.schemas import Attraction, POIInfo, TripRequest
 from .poi_category_service import classify_poi
+from .place_name_service import landmark_names_match
+from .venue_policy import venue_kind
 
 
 @dataclass(frozen=True)
@@ -38,7 +40,7 @@ class POIMetadata:
 # A curated seed is deliberately small. Unknown/live POIs still receive
 # metadata through the transparent rules below.
 BEIJING_POI_METADATA: dict[str, POIMetadata] = {
-    "故宫": POIMetadata(("historic", "culture"), "东城区", 10, 10, 180, 9, "medium", 1.8, True),
+    "故宫": POIMetadata(("historic", "culture", "museum"), "东城区", 10, 10, 180, 9, "medium", 1.8, True),
     "天坛": POIMetadata(("historic", "culture", "park"), "东城区", 9, 10, 180, 8, "medium", 1.8, True),
     "八达岭长城": POIMetadata(("historic", "natural"), "延庆区", 10, 10, 300, 9, "high", 4.0, False),
     "慕田峪长城": POIMetadata(("historic", "natural"), "怀柔区", 9, 9, 300, 8, "high", 4.0, False),
@@ -76,7 +78,7 @@ CITY_CLASSIC_NAMES: dict[str, set[str]] = {
     "北京": {
         "故宫", "天坛", "八达岭长城", "慕田峪长城", "颐和园", "圆明园",
         "北京大学", "国家博物馆", "景山", "王府井", "什刹海", "南锣鼓巷",
-        "798", "中国电影博物馆", "中国海关博物馆",
+        "798",
     },
     "上海": {
         "外滩", "上海博物馆", "豫园", "陆家嘴", "武康路", "静安寺",
@@ -113,6 +115,7 @@ CITY_CORE_NAMES: dict[str, tuple[str, ...]] = {
 
 # --- 用户偏好关键词 → POI 分类映射 ---
 PREFERENCE_CATEGORY_MAP: dict[str, set[str]] = {
+    "博物馆": {"museum"},
     "历史": {"historic", "temple"},
     "文化": {"culture", "museum", "temple", "historic", "art"},
     "自然": {"natural", "park", "zoo"},
@@ -228,11 +231,11 @@ def metadata_for_poi(
     provider_duration_minutes: int | None = None,
     provider_crowd_level: int = 5,
 ) -> POIMetadata:
-    if city == "北京":
+    if city == "北京" and venue_kind(name, poi_type) == "attraction":
         for alias, metadata in sorted(
             BEIJING_POI_METADATA.items(), key=lambda item: -len(item[0])
         ):
-            if alias in name:
+            if landmark_names_match(alias, name):
                 return metadata
 
     text = f"{name} {poi_type}"
@@ -318,11 +321,11 @@ def enrich_attraction(
     # --- 三维打分：基础质量 + 经典加成 + 偏好加分 - 小众扣分 ---
     classic_names = get_city_classic_names(request.city)
     is_curated = any(
-        curated_name in attraction.name
+        landmark_names_match(curated_name, attraction.name)
         for curated_name in classic_names
     ) and metadata.first_visit_priority >= 7
     is_core_landmark = any(
-        core_name in attraction.name or attraction.name in core_name
+        landmark_names_match(core_name, attraction.name)
         for core_name in get_city_core_names(request.city)
     )
     is_unknown_museum = (

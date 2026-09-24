@@ -148,6 +148,7 @@ class ExperienceIssue(BaseModel):
     evidence: str
     repair_strategy: RepairStrategy
     affected_visit_keys: list[str] = Field(default_factory=list)
+    evidence_sources: list[str] = Field(default_factory=list)
     source: Literal["deterministic", "llm"] = "deterministic"
     resolution_status: IssueResolution = "open"
     fingerprint: str = ""

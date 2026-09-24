@@ -45,6 +45,12 @@ export interface Meal {
   location?: Location
   description?: string
   estimated_cost?: number
+  poi_id?: string
+  source?: string
+  dietary_status?: string
+  planned_arrival_time?: string
+  planned_departure_time?: string
+  duration_minutes?: number
 }
 
 export interface Hotel {
@@ -56,6 +62,14 @@ export interface Hotel {
   distance: string
   type: string
   estimated_cost?: number
+  tier_source?: string
+  price_source?: string
+  price_note?: string
+  star_rating?: number
+  quoted_total?: number
+  quote_timestamp?: string
+  quote_checkin?: string
+  quote_checkout?: string
 }
 
 export interface RouteStep {
@@ -73,6 +87,11 @@ export interface RouteSegment {
   origin: string
   destination: string
   route_type: string
+  cost_mode?: string
+  estimated_cost?: number
+  cost_low?: number
+  cost_high?: number
+  cost_note?: string
   distance_meters: number
   duration_minutes: number
   walking_distance_meters: number
@@ -153,6 +172,9 @@ export interface DayPlan {
   daily_elapsed_minutes?: number
   day_utilization_score?: number
   daily_cost?: number
+  accommodation_nights?: number
+  daily_transport_cost?: number
+  transport_fixed_costs?: Record<string, number>
   planned_start_time?: string
   planned_end_time?: string
 }
@@ -227,6 +249,22 @@ export interface TripPlan {
     score: number
   }
   failure_reason?: string
+  quality_gate_passed?: boolean
+  degraded_reason?: string
+  best_effort?: boolean
+  suggested_alternatives?: string[]
+  unresolved_blocking_issues?: Array<{
+    issue_type: string
+    severity: string
+    day?: number
+    evidence: string
+  }>
+  unresolved_non_blocking_issues?: Array<{
+    issue_type: string
+    severity: string
+    day?: number
+    evidence: string
+  }>
 }
 
 export type AvoidCategory =
@@ -249,6 +287,9 @@ export interface TripFormData {
   preferences: string[]
   free_text_input: string
   budget_limit?: number
+  party_size?: number
+  room_count?: number
+  rental_days?: number
   pace: 'relaxed' | 'balanced' | 'packed'
   must_visit: string[]
   avoid_categories: AvoidCategory[]

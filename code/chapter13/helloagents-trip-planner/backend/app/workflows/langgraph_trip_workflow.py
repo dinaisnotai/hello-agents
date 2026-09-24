@@ -18,6 +18,7 @@ from hello_agents import SimpleAgent
 
 from ..agents.agent_utils import parse_agent_result, run_stateless_agent
 from ..agents.multi_agent_orchestrator import MultiAgentOrchestrator, get_multi_agent_orchestrator
+from ..agents.trip_planner_agent import MultiAgentTripPlanner
 from ..config import settings
 from ..models.agent_outputs import AttractionSearchResult, HotelSearchResult, WeatherQueryResult
 from ..models.schemas import Attraction, EvidenceSource, Hotel, TripPlan, TripRequest, WorkflowExecutionSummary
@@ -93,14 +94,10 @@ class LangGraphTripWorkflow:
 
         graph.add_edge(START, "parse_intent")   #edge可以把node连起来，这里一个parse_INTENT连了好几个node，并行
         graph.add_edge("parse_intent", "constraint_extractor")
-        graph.add_edge("constraint_extractor", "attraction")
-        graph.add_edge("constraint_extractor", "weather")
-        graph.add_edge("constraint_extractor", "hotel")
         graph.add_edge("constraint_extractor", "rag")
-        graph.add_edge("attraction", "build_draft")
-        graph.add_edge("weather", "build_draft")
-        graph.add_edge("hotel", "build_draft")
-        graph.add_edge("rag", "build_draft")
+        for specialist in ("attraction", "weather", "hotel"):
+            graph.add_edge("rag", specialist)
+        graph.add_edge(["attraction", "weather", "hotel"], "build_draft")
         graph.add_edge("build_draft", "deterministic_planning")
         graph.add_edge("deterministic_planning", "validate_constraints")
         graph.add_conditional_edges(
@@ -351,6 +348,8 @@ class LangGraphTripWorkflow:
                 build_method
             ).parameters:
                 kwargs["hotel_candidates"] = hotel_candidates
+            if "defer_refinement" in inspect.signature(build_method).parameters:
+                kwargs["defer_refinement"] = True
             plan = build_method(
                 request,
                 planning_candidates,
@@ -394,10 +393,7 @@ class LangGraphTripWorkflow:
 
     def validate_constraints(self, state: PlanningState) -> dict[str, Any]:
         plan = TripPlan.model_validate(state["deterministic_plan"])
-        valid = plan.validation_result.valid and (
-            bool(plan.normalized_constraints)
-            or plan.constraint_report.passed
-        )
+        valid = MultiAgentTripPlanner._hard_constraints_pass(plan) and plan.constraint_report.passed
         event = "passed" if valid else "failed"
         detail = (
             f"score={plan.validation_result.score:.2f} "
@@ -445,6 +441,7 @@ class LangGraphTripWorkflow:
             )
             return {
                 "hard_pass": hard_pass,
+                "excess": MultiAgentTripPlanner._hard_violation_excess(candidate),
                 "hard_keys": (
                     sorted(hard_keys_method(candidate))
                     if hard_keys_method is not None
@@ -530,6 +527,8 @@ class LangGraphTripWorkflow:
                 review_kwargs["available_attractions"] = candidates
             if "hotel_candidates" in review_parameters:
                 review_kwargs["hotel_candidates"] = hotels.candidates
+            if "repair_budget" in review_parameters:
+                review_kwargs["repair_budget"] = max(0, self.max_repair_attempts - state.get("repair_count", 0))
             reviewed = review_method(
                 request,
                 plan,
@@ -538,7 +537,8 @@ class LangGraphTripWorkflow:
                 **review_kwargs,
             )
             if (
-                getattr(self.orchestrator.planner_agent, "agent", None) is None
+                "repair_budget" not in review_parameters
+                and getattr(self.orchestrator.planner_agent, "agent", None) is None
                 and hasattr(
                     self.orchestrator.plan_builder,
                     "run_quality_loop",
@@ -549,6 +549,7 @@ class LangGraphTripWorkflow:
                     request,
                     candidates,
                     hotel_candidates=hotels.candidates,
+                    max_iterations=max(0, self.max_repair_attempts - state.get("repair_count", 0)),
                 )
             self._log(state, "soft_review", "completed")
             return {"deterministic_plan": reviewed.model_dump(mode="json"), "trace": [self._trace("soft_review", "completed")]}
@@ -558,15 +559,45 @@ class LangGraphTripWorkflow:
 
     def finalize(self, state: PlanningState) -> dict[str, Any]:
         plan = TripPlan.model_validate(state["deterministic_plan"])
-        if not plan.validation_result.valid:
+        if (
+            not MultiAgentTripPlanner._hard_constraints_pass(plan)
+            or not plan.constraint_report.passed
+        ):
             hard_messages = [
                 item.message
                 for item in plan.validation_result.violations
                 if item.severity == "hard"
             ]
-            plan.failure_reason = plan.failure_reason or "; ".join(
-                hard_messages
+            hard_messages.extend(
+                item.message
+                for item in plan.constraint_report.items
+                if not item.passed
+                and item.severity.lower() in {"blocker", "hard", "critical"}
+                and not item.name.startswith("Constraint:")
+                and not (item.name == "每日步行距离" and any(v.type == "WALKING_LIMIT" for v in plan.validation_result.violations))
             )
+            plan.failure_reason = "; ".join(dict.fromkeys(hard_messages)) or plan.failure_reason or "存在未满足的硬约束"
+            # The bounded repair loop may exhaust its budget before the soft
+            # reviewer runs.  Preserve the hard failure as a blocking quality
+            # issue so the API status, quality gate and UI always agree.
+            unresolved = ExperienceIssue(
+                issue_type="constraint_failure",
+                severity="high",
+                evidence=plan.failure_reason or "存在未满足的硬约束",
+                repair_strategy=RepairStrategy.RUN_CONSTRAINT_REPAIR,
+                source="deterministic",
+                resolution_status="unresolved_blocking",
+            )
+            if not any(item.fingerprint == unresolved.fingerprint for item in plan.unresolved_blocking_issues):
+                plan.unresolved_blocking_issues.append(unresolved)
+                plan.unresolved_quality_issues.append(unresolved)
+            plan.quality_gate_passed = False
+            plan.best_effort = True
+            plan.degraded_reason = plan.failure_reason
+            plan.suggested_alternatives = sorted(set([
+                *plan.suggested_alternatives,
+                "减少当天景点、改乘公共交通，或提高每日步行上限后重新计算。",
+            ]))
         if not plan.quality_gate_passed:
             plan.risk_warnings = sorted(
                 set(
@@ -619,10 +650,7 @@ class LangGraphTripWorkflow:
 
     def _next_after_validation(self, state: PlanningState) -> str:
         plan = TripPlan.model_validate(state["deterministic_plan"])
-        valid = plan.validation_result.valid and (
-            bool(plan.normalized_constraints)
-            or plan.constraint_report.passed
-        )
+        valid = MultiAgentTripPlanner._hard_constraints_pass(plan) and plan.constraint_report.passed
         if not valid and state.get("repair_count", 0) < self.max_repair_attempts:
             return "repair"
         return "review" if valid else "finalize"
@@ -671,7 +699,10 @@ class LangGraphTripWorkflow:
         key = f"{name}_result"
         try:
             request = TripRequest.model_validate(SpecialistNodeInput(request=state["request"], intent=TravelIntent.model_validate(state["intent"])).request)
-            result = result_type.model_validate(runner(request))
+            kwargs = {}
+            if "evidence" in inspect.signature(runner).parameters:
+                kwargs["evidence"] = [EvidenceSource.model_validate(item) for item in state.get("rag_results", [])]
+            result = result_type.model_validate(runner(request, **kwargs))
             update: dict[str, Any] = {key: result.model_dump(mode="json"), "trace": [self._trace(name, "completed")]}
             if result.used_fallback:
                 update["degraded_services"] = [name]

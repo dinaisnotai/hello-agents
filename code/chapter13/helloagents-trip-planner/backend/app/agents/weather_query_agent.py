@@ -40,12 +40,16 @@ class WeatherQueryAgent:
                 enable_tool_calling=True,
             )
 
-    def run(self, request: TripRequest) -> WeatherQueryResult:
+    def run(self, request: TripRequest, *, evidence=()) -> WeatherQueryResult:
+        observed = self._complete_dates(request, self.weather_tool.amap_service.get_weather(request.city))
         agent_input = {
             "city": request.city,
             "start_date": request.start_date,
             "end_date": request.end_date,
             "travel_days": request.travel_days,
+            "verified_weather": [item.model_dump(mode="json") for item in observed],
+            "travelers": request.travelers,
+            "guide_evidence": [item.model_dump(mode="json") for item in evidence[:4]],
         }
         if self.agent is not None:
             try:
@@ -56,9 +60,24 @@ class WeatherQueryAgent:
                         max_tool_iterations=specialist_max_tool_iterations(),
                     )
                 result = parse_agent_result(raw_result, WeatherQueryResult)
-                if not result.weather:
-                    raise ValueError("天气 Agent 没有返回天气数据")
-                result.weather = self._complete_dates(request, result.weather)
+                result.weather = observed
+                # Unknown dates must not inherit a model-generated forecast.
+                verified_risk_text = []
+                for text in result.risk_summary:
+                    if any(
+                        item.day_weather != "未知"
+                        and item.date in text
+                        and any(
+                            condition and condition != "未知" and condition in text
+                            for condition in (item.day_weather, item.night_weather)
+                        )
+                        for item in observed
+                    ):
+                        verified_risk_text.append(text)
+                result.risk_summary = list(dict.fromkeys([
+                    *self._summarize_risks(observed),
+                    *verified_risk_text,
+                ]))
                 result.used_fallback = False
                 return result
             except Exception as exc:

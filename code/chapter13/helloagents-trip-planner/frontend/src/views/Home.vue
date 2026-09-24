@@ -2,8 +2,8 @@
   <main class="home-page">
     <section class="planner-shell">
       <div class="page-title">
-        <h1>约束感知旅行规划助手</h1>
-        <p>输入预算、节奏、必去点和限制条件，生成可解释、可评测的多智能体旅行计划。</p>
+        <h1>旅行规划助手</h1>
+        <p>告诉我们想去哪里、玩几天和必去景点，按你的节奏安排每天的路线。</p>
       </div>
 
       <a-card :bordered="false" class="form-card">
@@ -55,8 +55,10 @@
                 <a-select v-model:value="formData.transportation" size="large">
                   <a-select-option value="公共交通">公共交通</a-select-option>
                   <a-select-option value="步行">步行</a-select-option>
-                  <a-select-option value="自驾">自驾</a-select-option>
-                  <a-select-option value="混合">混合</a-select-option>
+                  <a-select-option value="打车/网约车">打车／网约车</a-select-option>
+                  <a-select-option value="自有车辆自驾">自有车辆自驾</a-select-option>
+                  <a-select-option value="租车自驾">租车自驾</a-select-option>
+                  <a-select-option value="混合">混合（公共交通＋打车）</a-select-option>
                 </a-select>
               </a-form-item>
             </a-col>
@@ -93,6 +95,24 @@
           <a-form-item label="旅行偏好">
             <a-checkbox-group v-model:value="formData.preferences" :options="preferenceOptions" />
           </a-form-item>
+
+          <a-row :gutter="16">
+            <a-col :xs="24" :md="8">
+              <a-form-item label="出行人数（交通、门票和餐费按人数估算）">
+                <a-input-number v-model:value="formData.party_size" :min="1" :max="20" />
+              </a-form-item>
+            </a-col>
+            <a-col :xs="24" :md="8">
+              <a-form-item label="酒店房间数（出发日入住，结束日退房）">
+                <a-input-number v-model:value="formData.room_count" :min="1" :max="10" />
+              </a-form-item>
+            </a-col>
+            <a-col v-if="formData.transportation === '租车自驾'" :xs="24" :md="8">
+              <a-form-item label="租赁计费天数（不足24小时按一天；留空按行程天数）">
+                <a-input-number v-model:value="formData.rental_days" :min="1" :max="31" />
+              </a-form-item>
+            </a-col>
+          </a-row>
 
           <a-row :gutter="16">
             <a-col :xs="24" :md="8">
@@ -176,6 +196,9 @@ const formData = reactive<TripFormState>({
   preferences: ['历史文化'],
   free_text_input: '',
   budget_limit: 2500,
+  party_size: 1,
+  room_count: 1,
+  rental_days: undefined,
   pace: 'balanced',
   must_visit: ['故宫'],
   avoid_categories: [],
@@ -203,6 +226,10 @@ watch([() => formData.start_date, () => formData.end_date], ([start, end]) => {
 })
 
 const handleSubmit = async () => {
+  if (!formData.city.trim()) {
+    message.error('请输入目的地城市')
+    return
+  }
   if (!formData.start_date || !formData.end_date) {
     message.error('请选择出行日期')
     return
@@ -212,17 +239,25 @@ const handleSubmit = async () => {
   try {
     const payload: TripFormData = {
       ...formData,
+      city: formData.city.trim(),
       start_date: formData.start_date.format('YYYY-MM-DD'),
       end_date: formData.end_date.format('YYYY-MM-DD')
     }
     const response = await generateTripPlan(payload)
-    if (response.success && response.data) {
+    // A degraded response still contains a saved, reviewable plan.  Show it
+    // instead of stranding the user on the form; the result page explains the
+    // constraints that still need attention.
+    if (response.data) {
       sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
       sessionStorage.setItem('tripRequest', JSON.stringify(payload))
       if (response.session_id) {
         localStorage.setItem('currentTripSessionId', response.session_id)
       }
-      message.success('旅行计划生成成功')
+      if (response.success) {
+        message.success('旅行计划生成成功')
+      } else {
+        message.warning('行程已生成，但仍有未满足的约束，请先查看结果页的红色提示')
+      }
       router.push({
         path: '/result',
         query: response.session_id ? { session: response.session_id } : undefined

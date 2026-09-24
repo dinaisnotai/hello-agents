@@ -7,7 +7,10 @@ import type {
   TripSessionResponse,
 } from '@/types'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// `localhost` resolves to IPv6 first on some Windows machines. Docker may
+// occupy [::1]:8000 while the Python API listens on IPv4, making requests
+// appear to hang without ever reaching FastAPI.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 const configuredTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS || 300000)
 const API_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
   ? configuredTimeout

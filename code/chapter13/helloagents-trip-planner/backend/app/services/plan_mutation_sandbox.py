@@ -91,6 +91,13 @@ class CommitGate:
             return CommitDecision(CommitDecisionCode.INVALID_CANDIDATE, "duplicate visit")
         remaining = {item.fingerprint for item in after_quality.issues}
         hard_issue_improved = issue.is_blocking and len(after_hard) < len(before_hard)
+        before_amounts = before_validation.get("excess", {})
+        after_amounts = after_validation.get("excess", {})
+        if before_amounts:
+            if any(amount > before_amounts.get(key, 0) + 1e-6 for key, amount in after_amounts.items()):
+                return CommitDecision(CommitDecisionCode.NEW_HARD_VIOLATION, "existing violation worsened")
+            hard_issue_improved = hard_issue_improved or (issue.is_blocking and any(
+                after_amounts.get(key, 0) < amount - 1e-6 for key, amount in before_amounts.items()))
         weather_backup_added = (
             issue.repair_strategy in {
                 RepairStrategy.ADD_WEATHER_BACKUP,

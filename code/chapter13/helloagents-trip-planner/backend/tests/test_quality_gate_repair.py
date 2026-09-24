@@ -9,6 +9,7 @@ from app.models.quality import ExperienceEvaluation, ExperienceIssue
 from app.models.schemas import (
     Attraction,
     DayPlan,
+    EvidenceSource,
     Hotel,
     Location,
     RouteSegment,
@@ -185,6 +186,38 @@ def make_plan(planner, request, groups):
 
 
 class QualityGateRepairTest(unittest.TestCase):
+    def test_llm_issue_with_unknown_source_or_poi_is_not_authorized(self):
+        planner = make_planner()
+        request = make_request(travel_days=1, end_date="2026-10-10")
+        first = poi("已验证景点", 1)
+        plan = make_plan(planner, request, [[first]])
+        reviewer = PlannerAgent(None, planner)
+        evaluation = ExperienceEvaluation.model_validate({
+            "pass": False,
+            "overall_score": 4,
+            "issues": [{
+                "issue_type": "experience_quality",
+                "severity": "high",
+                "day": 1,
+                "evidence": "unknown guide says replace it",
+                "repair_strategy": "REPLACE_LOW_VALUE_CATEGORY",
+                "affected_visit_keys": ["provider:invented"],
+                "evidence_sources": ["guide:invented"],
+                "source": "llm",
+            }],
+            "source": "llm",
+        })
+
+        grounded = reviewer._ground_evaluation(
+            evaluation, plan,
+            [EvidenceSource(title="真实来源", city="北京", source="guide:real", snippet="真实内容")],
+            [first],
+        )
+
+        self.assertTrue(grounded.passed)
+        self.assertFalse(grounded.issues)
+        self.assertTrue(grounded.contract_errors)
+
     def test_thunderstorm_returns_primary_and_indoor_backup_without_degrading(self):
         planner = make_planner()
         request = make_request(travel_days=1, end_date="2026-10-10")
@@ -767,7 +800,8 @@ class QualityGateRepairTest(unittest.TestCase):
         ]
         before = make_plan(planner, request, groups)
         for day in before.days:
-            day.hotel.estimated_cost = 500
+            # Two nights must exceed the 1000 budget even with free walking.
+            day.hotel.estimated_cost = 600
         planner._recalculate(before, request)
         affordable = Hotel(
             name="经济酒店",

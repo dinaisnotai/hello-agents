@@ -35,16 +35,19 @@ AvoidCategory = Literal[
 class TripRequest(BaseModel):
     """Request for a personalized trip plan."""
 
-    city: str = Field(..., description="Destination city", example="北京")
+    city: str = Field(..., min_length=1, description="Destination city", example="北京")
     start_date: str = Field(..., description="Start date, YYYY-MM-DD", example="2026-08-01")
     end_date: str = Field(..., description="End date, YYYY-MM-DD", example="2026-08-03")
     travel_days: int = Field(..., description="Trip length in days", ge=1, le=30, example=3)
-    transportation: str = Field(..., description="Preferred transportation", example="公共交通")
-    accommodation: str = Field(..., description="Accommodation preference", example="经济型酒店")
+    transportation: str = Field(..., min_length=1, description="Preferred transportation", example="公共交通")
+    accommodation: str = Field(..., min_length=1, description="Accommodation preference", example="经济型酒店")
     preferences: List[str] = Field(default_factory=list, description="Interest tags")
     free_text_input: Optional[str] = Field(default="", description="Extra natural-language requirements")
 
     budget_limit: Optional[int] = Field(default=None, ge=0, description="Total budget limit in CNY")
+    party_size: int = Field(default=1, ge=1, le=20)
+    room_count: int = Field(default=1, ge=1, le=10)
+    rental_days: Optional[int] = Field(default=None, ge=1, le=31)
     pace: str = Field(default="balanced", description="Trip pace: relaxed/balanced/packed")
     must_visit: List[str] = Field(default_factory=list, description="Must-visit attractions")
     avoid_categories: List[AvoidCategory] = Field(default_factory=list, description="Canonical POI categories to avoid")
@@ -84,6 +87,25 @@ class TripRequest(BaseModel):
     @classmethod
     def normalize_city(cls, value: object) -> str:
         return normalize_city_name(str(value or ""))
+
+    @field_validator("transportation", "accommodation", mode="before")
+    @classmethod
+    def normalize_required_text(cls, value: object) -> str:
+        return str(value or "").strip()
+
+    @field_validator(
+        "preferences",
+        "must_visit",
+        "dietary_restrictions",
+        "hard_constraints",
+        "soft_preferences",
+        mode="before",
+    )
+    @classmethod
+    def remove_blank_list_items(cls, value: object):
+        if not isinstance(value, list):
+            return value
+        return [str(item).strip() for item in value if str(item).strip()]
 
     @field_validator(
         "daily_start_time",
@@ -224,6 +246,16 @@ class Meal(BaseModel):
     location: Optional[Location] = None
     description: Optional[str] = None
     estimated_cost: int = Field(default=0, ge=0)
+    poi_id: str = ""
+    duration_minutes: int = 60
+    planned_arrival_time: Optional[str] = None
+    planned_departure_time: Optional[str] = None
+    source: str = "unconfirmed"
+    dietary_status: str = "需向餐厅确认"
+
+    @property
+    def visit_duration(self) -> int:
+        return self.duration_minutes
 
 
 class Hotel(BaseModel):
@@ -234,6 +266,18 @@ class Hotel(BaseModel):
     rating: str = ""
     distance: str = ""
     type: str = ""
+    tier_source: str = "unknown"
+    price_source: str = "estimate"
+    price_note: str = "每间每晚的规划估算，非实时房价"
+    provider_hotel_id: str = ""
+    star_rating: Optional[float] = None
+    quoted_total: Optional[float] = None
+    quote_checkin: str = ""
+    quote_checkout: str = ""
+    quote_rooms: int = 0
+    quote_party_size: int = 0
+    quote_currency: str = "CNY"
+    quote_timestamp: str = ""
     estimated_cost: int = Field(default=0, ge=0)
     selection_score: float = Field(
         default=0,
@@ -257,6 +301,12 @@ class RouteSegment(BaseModel):
     origin: str
     destination: str
     route_type: str = "walking"
+    cost_mode: str = ""
+    estimated_cost: int = Field(default=0, ge=0)
+    cost_low: int = Field(default=0, ge=0)
+    cost_high: int = Field(default=0, ge=0)
+    cost_source: str = "estimate"
+    cost_note: str = ""
     distance_meters: float = 0
     duration_minutes: int = 0
     walking_distance_meters: float = 0
@@ -307,6 +357,9 @@ class DayPlan(BaseModel):
         description="Scheduled visit, route and meal time as a percentage of daily availability",
     )
     daily_cost: int = 0
+    accommodation_nights: int = 0
+    daily_transport_cost: int = 0
+    transport_fixed_costs: Dict[str, int] = Field(default_factory=dict)
     planned_start_time: Optional[str] = None
     planned_end_time: Optional[str] = None
     available_minutes: Optional[int] = Field(

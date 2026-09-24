@@ -366,6 +366,15 @@ class RepairController:
                         f"add_core_landmark:{attraction.name}:"
                         f"day{target.day_index + 1}"
                     )
+                # A full day needs a substitution, not another long visit.
+                for old in sorted(target.attractions, key=lambda item: item.score):
+                    if old.is_core_landmark or self.planner.spatial_planner._is_must_visit(old, request.must_visit):
+                        continue
+                    replacement_day = deepcopy(target)
+                    replacement_day.attractions = [item for item in replacement_day.attractions if item.name != old.name]
+                    if self.planner._try_add_attraction(replacement_day, attraction, request, candidates):
+                        target.attractions = replacement_day.attractions
+                        return f"add_core_landmark:replace:{old.name}->{attraction.name}"
         return None
 
     def _repair_diversity(
@@ -376,6 +385,35 @@ class RepairController:
         hotel_candidates,
         issue,
     ) -> str | None:
+        if issue.issue_type == "preference_alignment":
+            from .poi_metadata_service import preference_matches_categories
+            categories = {category for day in plan.days for item in day.attractions for category in item.categories}
+            missing = [pref for pref in request.preferences if "美食" not in pref and not preference_matches_categories([pref], categories)]
+            changes = []
+            for preference in missing:
+                matching = [item for item in self._unused(plan, candidates) if preference_matches_categories([preference], set(item.categories))]
+                repaired = False
+                for replacement in sorted(matching, key=lambda item: -item.score):
+                    for day in sorted(plan.days, key=lambda item: item.daily_duration_minutes):
+                        if self.planner._try_add_attraction(day, replacement, request, candidates):
+                            changes.append(replacement.name)
+                            repaired = True
+                            break
+                        for old in sorted(day.attractions, key=lambda item: item.score):
+                            if self.planner.spatial_planner._is_must_visit(old, request.must_visit):
+                                continue
+                            proposed = deepcopy(day)
+                            proposed.attractions = [item for item in proposed.attractions if item.name != old.name]
+                            if self.planner._try_add_attraction(proposed, replacement, request, candidates):
+                                day.attractions = proposed.attractions
+                                changes.append(replacement.name)
+                                repaired = True
+                                break
+                        if repaired:
+                            break
+                    if repaired:
+                        break
+            return "cover_missing_preferences:" + ",".join(changes) if changes else None
         target = self._target_day(plan, issue)
         planned = [
             (day, attraction)

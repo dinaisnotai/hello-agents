@@ -48,6 +48,24 @@ class Settings(BaseSettings):
     amap_api_key: str = ""
     amap_timeout_seconds: float = 8.0
 
+    # Planning assumptions, not official tariffs or live quotes (CNY).
+    taxi_base_fare: float = 15
+    taxi_included_km: float = 3
+    taxi_per_km: float = 3
+    transit_fare_per_leg: float = 6
+    driving_cost_per_km: float = 0.7
+    parking_per_day: float = 50
+    toll_per_km: float = 0
+    rental_per_day: float = 300
+    rental_insurance_per_day: float = 60
+    vehicle_capacity: int = 4
+
+    # Read-only hotel-provider integration; do not send this key to the browser.
+    hotel_api_provider: str = "none"
+    liteapi_api_key: str = ""
+    liteapi_base_url: str = "https://api.liteapi.travel/v3.0"
+    liteapi_environment: str = "sandbox"
+
     # Unsplash API配置
     unsplash_access_key: str = ""
     unsplash_secret_key: str = ""
@@ -64,7 +82,7 @@ class Settings(BaseSettings):
     embedding_model: str = "doubao-embedding-vision-251215"
 
     # Workflow rollout. Keep the existing orchestrator as the safe default.
-    workflow_mode: str = "legacy"
+    workflow_mode: str = "langgraph"
     langgraph_checkpoint_db_path: str = ""
     enable_llm_intent_parsing: bool = False
     enable_context_governance: bool = True

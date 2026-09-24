@@ -4,7 +4,7 @@ import unittest
 from app.agents.attraction_search_agent import AttractionSearchAgent
 from app.agents.hotel_agent import HotelAgent
 from app.agents.weather_query_agent import WeatherQueryAgent
-from app.models.schemas import Location, POIInfo, TripRequest, WeatherInfo
+from app.models.schemas import EvidenceSource, Location, POIInfo, TripRequest, WeatherInfo
 from app.tools.amap_tools import AttractionSearchTool, HotelSearchTool, WeatherQueryTool
 
 
@@ -54,8 +54,10 @@ class _StubAgent:
     def __init__(self, payload):
         self.payload = payload
         self.kwargs = {}
+        self.input_payload = {}
 
     def run(self, input_text, **kwargs):
+        self.input_payload = json.loads(input_text)
         self.kwargs = kwargs
         return self.payload
 
@@ -101,6 +103,13 @@ class AmapAgentToolsTest(unittest.TestCase):
 
 
 class SpecialistAgentsTest(unittest.TestCase):
+    @staticmethod
+    def _evidence():
+        return [EvidenceSource(
+            title="核心区安排", city="北京", source="guide:test",
+            snippet="历史景点适合按相邻片区安排。", score=0.9,
+        )]
+
     def test_attraction_agent_parses_fenced_json(self):
         amap = _FakeAmapService()
         agent = AttractionSearchAgent(None, AttractionSearchTool(amap))
@@ -124,6 +133,54 @@ class SpecialistAgentsTest(unittest.TestCase):
         self.assertFalse(result.used_fallback)
         self.assertEqual(result.attractions[0].name, "故宫博物院")
         self.assertEqual(agent.agent.kwargs["max_tool_iterations"], 1)
+
+    def test_attraction_agent_uses_llm_queries_but_keeps_map_facts(self):
+        amap = _FakeAmapService()
+        agent = AttractionSearchAgent(None, AttractionSearchTool(amap))
+        agent.agent = _StubAgent(json.dumps({
+            "search_keywords": ["北京历史地标"],
+            "attractions": [{
+                "name": "模型编造景点", "poi_id": "fake",
+                "location": {"longitude": 0, "latitude": 0},
+            }],
+        }, ensure_ascii=False))
+
+        result = agent.run(_request(), evidence=self._evidence())
+
+        self.assertNotIn("模型编造景点", [item.name for item in result.attractions])
+        self.assertTrue(all(item.poi_id == "poi-1" for item in result.attractions))
+        self.assertEqual(agent.agent.input_payload["guide_evidence"][0]["source"], "guide:test")
+
+    def test_weather_agent_keeps_verified_forecast_when_llm_invents_weather(self):
+        amap = _FakeAmapService()
+        agent = WeatherQueryAgent(None, WeatherQueryTool(amap))
+        agent.agent = _StubAgent(json.dumps({
+            "weather": [{
+                "date": "2026-08-01", "day_weather": "暴雪",
+                "night_weather": "暴雪",
+            }],
+            "risk_summary": ["2026-08-01暴雪，景点关闭"],
+        }, ensure_ascii=False))
+
+        result = agent.run(_request(), evidence=self._evidence())
+
+        self.assertEqual(result.weather[0].day_weather, "雷阵雨")
+        self.assertEqual(result.weather[1].day_weather, "未知")
+        self.assertFalse(any("暴雪" in item or "关闭" in item for item in result.risk_summary))
+
+    def test_hotel_agent_uses_search_direction_but_keeps_map_hotel(self):
+        amap = _FakeAmapService()
+        agent = HotelAgent(None, HotelSearchTool(amap))
+        agent.agent = _StubAgent(json.dumps({
+            "search_keywords": ["东城区 地铁 酒店"],
+            "candidates": [{"name": "模型编造酒店", "estimated_cost": 1}],
+            "recommended_hotel": {"name": "模型编造酒店", "estimated_cost": 1},
+        }, ensure_ascii=False))
+
+        result = agent.run(_request(), evidence=self._evidence())
+
+        self.assertEqual(result.recommended_hotel.name, "测试酒店")
+        self.assertEqual(result.recommended_hotel.estimated_cost, 350)
 
     def test_attraction_agent_reuses_poi_collector_as_fallback(self):
         amap = _FakeAmapService()

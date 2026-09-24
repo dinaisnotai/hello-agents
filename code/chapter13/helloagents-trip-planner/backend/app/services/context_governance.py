@@ -140,7 +140,14 @@ class RoleContextBuilder:
 
     @staticmethod
     def _plan_summary(plan, max_days):
-        return {"version": plan.plan_version.version, "days": [{"day": day.day_index + 1, "pois": [item.name for item in day.attractions], "travel_minutes": day.daily_travel_minutes, "walking_km": day.daily_walking_distance_km, "utilization": day.day_utilization_score} for day in plan.days[:max_days]], "budget_total": plan.budget.total if plan.budget else None}
+        return {"version": plan.plan_version.version, "days": [{"day": day.day_index + 1,
+            "pois": [item.name for item in day.attractions],
+            "travel_minutes": day.daily_travel_minutes,
+            "walking_km": day.daily_walking_distance_km + sum(item.estimated_internal_walking_km for item in day.attractions),
+            "utilization": day.day_utilization_score,
+            "meals": [{"name": item.name, "source": item.source, "start": item.planned_arrival_time, "end": item.planned_departure_time} for item in day.meals],
+            "hotel": {"name": day.hotel.name, "tier": day.hotel.type, "tier_source": day.hotel.tier_source, "price_source": day.hotel.price_source} if day.hotel else None
+            } for day in plan.days[:max_days]], "budget_total": plan.budget.total if plan.budget else None}
 
     @staticmethod
     def _validation(plan):

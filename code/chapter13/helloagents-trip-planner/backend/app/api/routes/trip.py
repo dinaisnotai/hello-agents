@@ -5,11 +5,10 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from ...agents.multi_agent_orchestrator import get_multi_agent_orchestrator
+from ...services.planner_service import get_planner
 from ...config import settings
 from ...models.schemas import ReplanRequest, TripPlanResponse, TripRequest
 from ...services.trip_conversation_service import get_trip_conversation_service
-from ...workflows.langgraph_trip_workflow import get_langgraph_trip_workflow
 
 router = APIRouter(prefix="/trip", tags=["Trip Planning"])
 logger = logging.getLogger("uvicorn.error")
@@ -24,10 +23,12 @@ async def plan_trip(request: TripRequest):
     try:
         workflow_summary = None
         if settings.workflow_mode.strip().lower() == "langgraph":
+            from ...workflows.langgraph_trip_workflow import get_langgraph_trip_workflow
+
             workflow = get_langgraph_trip_workflow()
             trip_plan, workflow_summary = await run_in_threadpool(workflow.run, request)
         else:
-            planner = get_multi_agent_orchestrator()
+            planner = get_planner()
             trip_plan = await run_in_threadpool(planner.plan_trip, request)
         conversation = get_trip_conversation_service()
         session = await run_in_threadpool(
@@ -68,7 +69,7 @@ async def plan_trip(request: TripRequest):
 )
 async def replan_trip(request: ReplanRequest):
     try:
-        planner = get_multi_agent_orchestrator()
+        planner = get_planner()
         trip_plan = await run_in_threadpool(planner.replan, request)
         executable = (
             trip_plan.validation_result.valid
@@ -92,7 +93,7 @@ async def replan_trip(request: ReplanRequest):
 @router.get("/health", summary="Trip planner health check")
 async def health_check():
     try:
-        planner = get_multi_agent_orchestrator()
+        planner = get_planner()
         return planner.health_snapshot()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"服务不可用: {exc}") from exc
