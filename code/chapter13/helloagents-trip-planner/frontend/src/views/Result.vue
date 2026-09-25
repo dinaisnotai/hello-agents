@@ -42,6 +42,7 @@
           <a-card title="预算" :bordered="false">
             <a-statistic title="预计总费用" :value="tripPlan.budget?.total || 0" suffix="元" />
             <p>全团规划估算，非实时成交价；门票、餐费按人数，住宿按房间和晚数计算。</p>
+            <p v-if="tripPlan.budget?.unpriced_attractions?.length" style="color: #ad6800">预算尚未包含以下景点的门票：{{ tripPlan.budget.unpriced_attractions.join('、') }}。当前金额不是完整总费用。</p>
             <p>住宿 {{ tripPlan.budget?.total_hotels || 0 }} · 交通 {{ tripPlan.budget?.total_transportation || 0 }} · 餐饮 {{ tripPlan.budget?.total_meals || 0 }} · 门票 {{ tripPlan.budget?.total_attractions || 0 }} 元</p>
             <p v-if="tripPlan.budget?.budget_limit">预算上限：{{ tripPlan.budget.budget_limit }} 元</p>
             <p v-if="tripPlan.budget?.remaining !== undefined">
@@ -104,7 +105,7 @@
               </a-descriptions-item>
               <a-descriptions-item label="交通总里程">{{ day.daily_distance_km || 0 }} km</a-descriptions-item>
               <a-descriptions-item label="路线步行">{{ day.daily_walking_distance_km || 0 }} km</a-descriptions-item>
-              <a-descriptions-item label="预计总步行">{{ totalWalkingKm(day) }} km（含景点内）</a-descriptions-item>
+              <a-descriptions-item label="预计总步行">{{ totalWalkingKm(day) }} km（含景点内）<span v-if="day.route_segments?.some(segment => segment.access_walking_confirmed === false)">；仅为已计入部分，上下车接驳步行待核实</span></a-descriptions-item>
               <a-descriptions-item label="游览时间">{{ formatMinutes(day.daily_visit_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="交通时间">{{ formatMinutes(day.daily_travel_minutes) }}</a-descriptions-item>
               <a-descriptions-item label="餐饮及缓冲">{{ formatMinutes(day.daily_buffer_minutes) }}</a-descriptions-item>
@@ -116,12 +117,20 @@
             <a-divider orientation="left">景点</a-divider>
             <a-list :data-source="day.attractions" bordered>
               <template #renderItem="{ item, index }">
-                <a-list-item>
+                <a-list-item class="attraction-row">
                   <template #actions>
                     <a-button size="small" :disabled="index === 0" @click="moveAttraction(day.day_index, index, -1)">上移</a-button>
                     <a-button size="small" :disabled="index === day.attractions.length - 1" @click="moveAttraction(day.day_index, index, 1)">下移</a-button>
                   </template>
-                  <a-list-item-meta :title="item.name" :description="`${item.planned_arrival_time || '--:--'} 到达 · ${item.planned_departure_time || '--:--'} 离开｜${item.address}｜游玩 ${item.visit_duration} 分钟｜${item.opening_time && item.closing_time ? `${item.hours_source === 'category_estimate' ? '预计营业' : '营业'} ${item.opening_time}-${item.closing_time}` : '营业时间待确认'}｜门票 ${item.ticket_price || 0}元`" />
+                  <div class="attraction-content">
+                  <h3>{{ item.name }}</h3>
+                  <p>{{ item.planned_arrival_time || '--:--' }} 到达 · {{ item.planned_departure_time || '--:--' }} 离开 · 游玩 {{ item.visit_duration }} 分钟</p>
+                  <p v-if="item.visit_duration_note">{{ item.visit_duration_note }}</p>
+                  <p>{{ item.address }}</p>
+                  <p>{{ item.opening_time && item.closing_time ? `${item.hours_source === 'category_estimate' ? '预计营业' : '营业'} ${item.opening_time}–${item.closing_time}` : '营业时间待确认' }} · 门票 {{ item.ticket_price_status === 'unknown' || !item.ticket_price_status ? '待核实' : `${item.ticket_price}元（${item.ticket_price_status === 'estimate' ? '估价' : '参考价'}）` }}</p>
+                  <p v-if="item.ticket_price_note">{{ item.ticket_price_note }} <a v-if="item.ticket_price_source" :href="item.ticket_price_source" target="_blank" rel="noopener noreferrer">票务来源</a></p>
+                  <p v-if="item.access_note">{{ item.access_note }}</p>
+                  </div>
                 </a-list-item>
               </template>
             </a-list>
@@ -132,9 +141,23 @@
                 <a-list-item>
                   <a-list-item-meta :title="`${item.type === 'lunch' ? '午餐' : item.type === 'dinner' ? '晚餐' : '早餐'} · ${item.name}`"
                     :description="`${item.planned_arrival_time || '时间待确认'}—${item.planned_departure_time || ''} · 预留${item.duration_minutes || 0}分钟 · 估算${item.estimated_cost || 0}元/人 · ${item.source === 'map_poi' ? '地图餐厅' : '餐厅待确认'}；${item.description || ''}`" />
+                  <a-tag v-if="item.cuisine_hint">本地特色方向：{{ item.cuisine_hint }}</a-tag>
                 </a-list-item>
               </template>
             </a-list>
+            <template v-if="day.schedule_blocks?.length">
+              <a-divider orientation="left">休息与时间缓冲</a-divider>
+              <a-list :data-source="day.schedule_blocks" bordered size="small">
+                <template #renderItem="{ item }">
+                  <a-list-item>
+                    <a-list-item-meta
+                      :title="`${item.type === 'rest' ? '休息' : '时间缓冲'} · ${item.start_time}—${item.end_time}`"
+                      :description="item.reason || '已预留时间'"
+                    />
+                  </a-list-item>
+                </template>
+              </a-list>
+            </template>
             <a-divider orientation="left">路线段（含已确认餐厅）</a-divider>
             <a-timeline>
               <a-timeline-item v-for="segment in day.route_segments" :key="`${segment.origin}-${segment.destination}`">
@@ -177,6 +200,7 @@
           <template #renderItem="{ item }">
             <a-list-item>
               <a-list-item-meta :title="item.title" :description="item.snippet" />
+              <a-tag v-if="item.retrieval_purpose">用于{{ item.retrieval_purpose }}规划</a-tag>
               <a-tag>{{ item.source }}</a-tag>
             </a-list-item>
           </template>
@@ -426,6 +450,25 @@ const exportJson = () => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.attraction-content {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.attraction-content h3 { margin: 0 0 8px; font-size: 16px; }
+.attraction-content p { margin: 4px 0; color: #667085; line-height: 1.6; }
+:deep(.attraction-row) { align-items: flex-start; gap: 16px; }
+:deep(.attraction-row .ant-list-item-action) { flex: 0 0 auto; margin-left: 0; }
+@media (max-width: 600px) {
+  .result-page { padding: 12px; }
+  .hero { padding: 16px; flex-direction: column; align-items: flex-start; }
+  :deep(.ant-card-body) { padding: 12px; }
+  :deep(.ant-collapse-content-box) { padding: 12px; }
+  :deep(.attraction-row) { flex-direction: column; padding: 12px; }
+  .attraction-content { width: 100%; flex-basis: auto; }
+  :deep(.attraction-row .ant-list-item-action) { align-self: flex-end; }
 }
 
 .constraint-text small {

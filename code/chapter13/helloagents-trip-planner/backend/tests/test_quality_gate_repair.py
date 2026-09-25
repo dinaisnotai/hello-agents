@@ -28,7 +28,7 @@ from app.services.planning_observability import (
 
 
 class _EstimatedRouteEvaluator:
-    def build_day_routes(self, day, city):
+    def build_day_routes(self, day, city, request=None):
         if not day.attractions:
             return []
         nodes = []
@@ -359,7 +359,7 @@ class QualityGateRepairTest(unittest.TestCase):
                             "severity": "warning",
                             "day": 1,
                             "evidence": "rain",
-                            "repair_strategy": "swap_weather_sensitive_attractions",
+                            "repair_strategy": "unbounded_free_text_strategy",
                             "source": "llm",
                         }
                     ],
@@ -381,7 +381,49 @@ class QualityGateRepairTest(unittest.TestCase):
             "unsupported repair_strategy",
             after.quality_evaluation.contract_errors[0],
         )
+        self.assertEqual(after.quality_evaluation.source, "deterministic")
         self.assertTrue(after.quality_gate_passed)
+
+    def test_known_review_strategy_alias_is_normalized_before_repair(self):
+        planner = make_planner()
+        request = make_request(travel_days=1, end_date="2026-10-10")
+        plan = make_plan(
+            planner, request, [[poi("A", 1), poi("B", 2, category="park")]]
+        )
+        reviewer = PlannerAgent(None, planner)
+        reviewer.agent = _SequenceAgent(
+            [
+                {
+                    "pass": False,
+                    "overall_score": 5,
+                    "issues": [
+                        {
+                            "issue_type": "weather_risk",
+                            "severity": "warning",
+                            "day": 1,
+                            "evidence": "rain",
+                            "repair_strategy": "swap_weather_sensitive_attractions",
+                            "source": "llm",
+                        }
+                    ],
+                    "source": "llm",
+                }
+            ]
+        )
+
+        evaluation = reviewer.evaluate_experience(
+            request,
+            plan,
+            WeatherQueryResult(),
+            [],
+            available_attractions=[],
+        )
+
+        self.assertIsNotNone(evaluation)
+        self.assertEqual(
+            evaluation.issues[0].repair_strategy.value,
+            "SWAP_WITH_INDOOR_CANDIDATE",
+        )
 
     def test_unrepairable_soft_issue_returns_best_effort_itinerary(self):
         planner = make_planner()

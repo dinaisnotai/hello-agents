@@ -45,8 +45,8 @@ def specialist_max_tool_iterations() -> int:
         return 1
 
 
-def parse_agent_result(raw_result: str, model_type: Type[ModelT]) -> ModelT:
-    """Accept plain JSON or a fenced JSON object and validate it."""
+def load_agent_json_object(raw_result: str) -> dict[str, Any]:
+    """Accept plain JSON or a fenced JSON object and return its object payload."""
 
     if not isinstance(raw_result, str) or not raw_result.strip():
         raise ValueError("Agent 返回了空结果")
@@ -65,4 +65,12 @@ def parse_agent_result(raw_result: str, model_type: Type[ModelT]) -> ModelT:
             raise
         payload = json.loads(text[start : end + 1])
 
-    return model_type.model_validate(payload)
+    if not isinstance(payload, dict):
+        raise ValueError("Agent 返回的 JSON 必须是对象")
+    return payload
+
+
+def parse_agent_result(raw_result: str, model_type: Type[ModelT]) -> ModelT:
+    """Accept plain JSON or a fenced JSON object and validate it."""
+
+    return model_type.model_validate(load_agent_json_object(raw_result))

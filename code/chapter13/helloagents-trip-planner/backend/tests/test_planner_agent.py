@@ -32,7 +32,7 @@ class _StubPlanBuilder:
     def __init__(self):
         self.calls = []
 
-    def build_plan_from_inputs(self, request, attractions, hotel, weather, evidence):
+    def build_plan_from_inputs(self, request, attractions, hotel, weather, evidence, hotel_candidates=()):
         self.calls.append(
             {
                 "request": request,
@@ -62,12 +62,12 @@ class _StubAgent:
 
 
 class _NoRouteEvaluator:
-    def build_day_routes(self, day, city):
+    def build_day_routes(self, day, city, request=None):
         return []
 
 
 class _RemoteRouteEvaluator:
-    def build_day_routes(self, day, city):
+    def build_day_routes(self, day, city, request=None):
         if not day.attractions or not day.hotel:
             return []
         attraction = day.attractions[0]
@@ -296,11 +296,13 @@ class PlannerAgentTest(unittest.TestCase):
         self.assertEqual(closing_soon.opening_hours_status, "closed")
         self.assertFalse(report.passed)
         self.assertFalse(
-            next(item for item in report.items if item.name == "Opening-hours feasibility").passed
+            next(item for item in report.items if item.name == "营业时间可行性").passed
         )
         action = planner._apply_next_repair(plan, request, [first, closing_soon])
-        self.assertEqual(action[0], "remove_closed_optional_attraction")
-        self.assertEqual(plan.days[0].attractions, [first])
+        self.assertEqual(action[0], "reorder_for_opening_hours")
+        self.assertEqual([a.name for a in plan.days[0].attractions], [closing_soon.name, first.name])
+        self.assertEqual([a.visit_duration for a in plan.days[0].attractions], [120, 240])
+        self.assertTrue(all(a.opening_hours_status == "open" for a in plan.days[0].attractions))
 
     def test_repair_loop_removes_low_priority_attraction_and_records_trace(self):
         attraction = Attraction(

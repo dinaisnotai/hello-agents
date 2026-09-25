@@ -13,6 +13,57 @@ from .trip_cost_service import stay_nights
 class AccommodationSelector:
     """Choose among existing hotel candidates without changing hotel search."""
 
+    def select_for_days(self, request, candidates, days, amap):
+        attractions = [a for day in days for a in day.attractions]
+        baseline = self.select(request, candidates, attractions)
+        if not getattr(getattr(amap, "settings", None), "amap_api_key", ""):
+            return baseline
+        from .mixed_route_selector import select_mixed_route
+        tier = self._tier(request.accommodation)
+        located = [h for h in candidates if h.location is not None]
+        matching = [h for h in located if self._tier(h.type) == tier
+                    and (request.budget_limit is None or h.estimated_cost * stay_nights(request) * request.room_count <= request.budget_limit * 0.5)]
+        pool = sorted((self.score_candidate(request, deepcopy(h), attractions) for h in (matching or located)),
+                      key=lambda h: -h.selection_score)[:3]
+        checked = []
+        for hotel in pool:
+            routes = []
+            for day in days:
+                if not day.attractions:
+                    continue
+                for outbound, attraction in ((True, day.attractions[0]), (False, day.attractions[-1])):
+                    point = (attraction.entrance_location if outbound else attraction.exit_location) or attraction.location
+                    kwargs = dict(origin_name=hotel.name if outbound else attraction.name,
+                                  origin_address="", origin=hotel.location if outbound else point,
+                                  destination_name=attraction.name if outbound else hotel.name,
+                                  destination_address="", destination=point if outbound else hotel.location, city=request.city)
+                    try:
+                        if any(x in request.transportation.lower() for x in ("混合", "mixed")):
+                            route = select_mixed_route(amap, kwargs, request, 1000)
+                        else:
+                            mode = estimate_leg(kwargs["origin"], kwargs["destination"], request.transportation).mode
+                            route = amap.route_between_pois(**kwargs, route_type=mode)
+                        if not route.description.startswith("[amap]"):
+                            routes = []
+                            break
+                        routes.append(route)
+                    except Exception:
+                        routes = []
+                        break
+                if not routes:
+                    break
+            expected = 2 * sum(bool(day.attractions) for day in days)
+            if len(routes) != expected or not routes:
+                continue
+            minutes = sum(r.duration / 60 for r in routes) / len(routes)
+            walking = sum(r.distance if r.route_type == "walking" else r.walking_distance for r in routes) / len(routes)
+            hotel.selection_score = round(self._budget_score(request, hotel) + self._type_score(request.accommodation, hotel)
+                                          - minutes - walking / 100, 2)
+            hotel.score_breakdown.update(actual_commute_minutes=round(minutes, 1), actual_commute_walking_meters=round(walking))
+            hotel.distance = f"按每日首末景点比较，单程平均约{minutes:.0f}分钟；已比较{len(pool)}家候选"
+            checked.append(hotel)
+        return max(checked, key=lambda h: h.selection_score) if checked else baseline
+
     def select(
         self,
         request: TripRequest,

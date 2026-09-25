@@ -18,6 +18,7 @@ from .spatial_planner import SpatialItineraryPlanner
 from .venue_policy import venue_kind
 from .poi_metadata_service import preference_matches_categories
 from .accommodation_selector import AccommodationSelector
+from .meal_planner import EARLIEST_DINNER_MINUTES
 
 
 class ItineraryCompletenessGate:
@@ -39,7 +40,7 @@ class ItineraryCompletenessGate:
         issues: list[ExperienceIssue] = []
         self._evaluate_product_contract(request, plan, issues)
         self._evaluate_days(request, plan, issues)
-        self._evaluate_duplicates(plan, issues)
+        self._evaluate_duplicates(request, plan, issues)
         self._evaluate_constraints(plan, issues)
         self._evaluate_required_visits(request, plan, candidates, issues)
         self._evaluate_confirmed_closures(plan, issues)
@@ -61,6 +62,21 @@ class ItineraryCompletenessGate:
     def _evaluate_product_contract(request, plan, issues):
         categories = set()
         for day in plan.days:
+            from .meal_planner import is_restaurant_record
+            for meal in day.meals:
+                if meal.source == "map_poi" and not is_restaurant_record(meal.name, meal.provider_type):
+                    issues.append(ExperienceIssue(issue_type="experience_quality", severity="critical", day=day.day_index + 1,
+                        evidence=f"用餐场所缺少可靠餐饮类型，需重新查询：{meal.name}",
+                        repair_strategy=RepairStrategy.REPLACE_LOW_VALUE_CATEGORY))
+            if any(not segment.access_walking_confirmed for segment in getattr(day, "route_segments", [])):
+                issues.append(ExperienceIssue(issue_type="experience_quality", severity="info", day=day.day_index + 1,
+                    evidence="打车上下车点到场所入口的步行尚未核实；当前步行数字只包含已计入部分，不能据此保证满足上限",
+                    repair_strategy=RepairStrategy.REPLACE_LOW_VALUE_CATEGORY))
+            unpriced = [a.name for a in day.attractions if getattr(a, "ticket_price_status", "unknown") == "unknown" and getattr(a, "ticket_price", 0) == 0]
+            if unpriced:
+                issues.append(ExperienceIssue(issue_type="experience_quality", severity="info", day=day.day_index + 1,
+                    evidence="门票尚未计入预算，不能确认总预算完整：" + "、".join(unpriced),
+                    repair_strategy=RepairStrategy.REPLACE_LOW_VALUE_CATEGORY))
             for attraction in day.attractions:
                 categories.update(attraction.categories)
                 if venue_kind(attraction.name, attraction.category or "") != "attraction":
@@ -153,6 +169,8 @@ class ItineraryCompletenessGate:
                     )
                 )
 
+            self._evaluate_meal_timing(request, day, issues)
+
             if day.daily_travel_minutes > self.severe_transport_minutes:
                 severity = "high"
             elif day.daily_travel_minutes > self.high_transport_minutes:
@@ -179,6 +197,7 @@ class ItineraryCompletenessGate:
 
     def _evaluate_duplicates(
         self,
+        request: TripRequest,
         plan: TripPlan,
         issues: list[ExperienceIssue],
     ) -> None:
@@ -186,25 +205,42 @@ class ItineraryCompletenessGate:
             item for day in plan.days for item in day.attractions
         ]
         self.identity_resolver.assign_visit_keys(attractions)
-        seen: dict[str, int] = {}
+        seen: list[tuple[Attraction, int]] = []
         for day in plan.days:
             for item in day.attractions:
-                if item.visit_key in seen:
+                duplicate = next(
+                    (
+                        (existing, existing_day)
+                        for existing, existing_day in seen
+                        if (
+                            self.identity_resolver.same_visit_entity(existing, item)
+                            or self.identity_resolver.same_requested_visit_entity(
+                                existing, item, request.must_visit
+                            )
+                        )
+                    ),
+                    None,
+                )
+                if duplicate is not None:
+                    existing, existing_day = duplicate
                     issues.append(
                         ExperienceIssue(
                             issue_type="duplicate_visit",
                             severity="critical",
                             day=day.day_index + 1,
                             evidence=(
-                                f"{item.name} repeats canonical visit "
-                                f"{item.visit_key} from Day {seen[item.visit_key]}"
+                                f"{item.name} repeats the same requested visit as "
+                                f"{existing.name} from Day {existing_day}"
                             ),
                             repair_strategy=RepairStrategy.REMOVE_DUPLICATE,
-                            affected_visit_keys=[item.visit_key],
+                            affected_visit_keys=[
+                                existing.visit_key or existing.poi_id or existing.name,
+                                item.visit_key or item.poi_id or item.name,
+                            ],
                         )
                     )
                 else:
-                    seen[item.visit_key] = day.day_index + 1
+                    seen.append((item, day.day_index + 1))
 
     @staticmethod
     def _evaluate_required_visits(
@@ -263,8 +299,7 @@ class ItineraryCompletenessGate:
                         severity="critical",
                         day=day.day_index + 1,
                         evidence=(
-                            f"{attraction.name} is confirmed closed in "
-                            "structured opening-hours data"
+                            f"{attraction.name}的当前游览时段超出营业时间，需提前离开或调整安排"
                         ),
                         repair_strategy=RepairStrategy.REMOVE_CLOSED_ATTRACTION,
                         affected_visit_keys=[
@@ -488,6 +523,36 @@ class ItineraryCompletenessGate:
         return (
             day.day_utilization_score < 70
             and day.daily_duration_minutes < 420
+        )
+
+    def _evaluate_meal_timing(self, request, day, issues) -> None:
+        """Catch persisted plans that put dinner in the middle of the afternoon."""
+
+        dinner = next((meal for meal in day.meals if meal.type == "dinner"), None)
+        if dinner is None or not dinner.planned_arrival_time:
+            return
+        dinner_start = self._minutes(dinner.planned_arrival_time, 24 * 60)
+        day_end = self._minutes(request.daily_end_time, 20 * 60)
+        # A user who explicitly ends the day by 18:00 may reasonably have an
+        # early dinner. The default 17:00 product window must not override it.
+        if request.daily_end_time and day_end <= 18 * 60:
+            return
+        if (
+            dinner_start >= EARLIEST_DINNER_MINUTES
+            or EARLIEST_DINNER_MINUTES + dinner.duration_minutes > day_end
+        ):
+            return
+        issues.append(
+            ExperienceIssue(
+                issue_type="experience_quality",
+                severity="warning",
+                day=day.day_index + 1,
+                evidence=(
+                    f"晚餐安排在{dinner.planned_arrival_time}，早于默认17:00晚餐时段；"
+                    "应补充下午活动，或明确安排返回酒店休息后再用餐"
+                ),
+                repair_strategy=RepairStrategy.ADD_NEARBY_COMPLEMENTARY_POI,
+            )
         )
 
     @staticmethod

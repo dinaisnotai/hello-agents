@@ -60,7 +60,7 @@ class HybridKnowledgeRetriever:
         candidates = [
             (index, doc)
             for index, doc in enumerate(self.documents)
-            if self._matches(doc, city, metadata)
+            if self._matches(doc, city, metadata) and not self._stale_penalty(doc)
         ]
         if not candidates or not query.strip() or top_k <= 0:
             return []

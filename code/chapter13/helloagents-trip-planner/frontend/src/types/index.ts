@@ -9,6 +9,7 @@ export interface Attraction {
   location: Location
   coordinates?: number[]
   visit_duration: number
+  visit_duration_note?: string
   suggested_duration_minutes?: number
   description: string
   category?: string
@@ -26,6 +27,10 @@ export interface Attraction {
   poi_id?: string
   image_url?: string
   ticket_price?: number
+  ticket_price_status?: string
+  ticket_price_source?: string
+  ticket_price_note?: string
+  access_note?: string
   score?: number
   recall_sources?: string[]
   score_breakdown?: Record<string, number>
@@ -47,6 +52,9 @@ export interface Meal {
   estimated_cost?: number
   poi_id?: string
   source?: string
+  provider_type?: string
+  cuisine_hint?: string
+  selection_reason?: string
   dietary_status?: string
   planned_arrival_time?: string
   planned_departure_time?: string
@@ -83,6 +91,7 @@ export interface RouteStep {
 }
 
 export interface RouteSegment {
+  access_walking_confirmed?: boolean
   day_index: number
   origin: string
   destination: string
@@ -104,6 +113,8 @@ export interface RouteSegment {
 }
 
 export interface Budget {
+  unpriced_attractions?: string[]
+  pricing_complete?: boolean
   total_attractions: number
   total_hotels: number
   total_meals: number
@@ -129,6 +140,7 @@ export interface ConstraintReport {
 }
 
 export interface EvidenceSource {
+  retrieval_purpose?: string
   title: string
   city: string
   source: string

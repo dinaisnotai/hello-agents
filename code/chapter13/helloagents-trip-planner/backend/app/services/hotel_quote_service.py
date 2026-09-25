@@ -8,6 +8,7 @@ from ..config import settings
 from ..models.schemas import Hotel
 from .trip_cost_service import stay_nights
 from .accommodation_selector import AccommodationSelector
+from .hotel_location import match_hotel_location
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -40,7 +41,7 @@ class HotelQuoteService:
     def _search(self, request, amap, client):
         city = {"北京": "Beijing", "上海": "Shanghai", "杭州": "Hangzhou", "成都": "Chengdu"}.get(request.city, request.city)
         tier = AccommodationSelector._tier(request.accommodation)
-        params = {"countryCode": "CN", "cityName": city, "limit": 10}
+        params = {"countryCode": "CN", "cityName": city, "limit": 30}
         if tier == "luxury":
             params["starRating"] = "5.0"
         elif tier == "comfortable":
@@ -86,11 +87,11 @@ class HotelQuoteService:
             stars = float(meta.get("stars") or 0)
             if tier == "luxury" and stars < 5:
                 continue
-            location = None
-            if getattr(getattr(amap, "settings", None), "amap_api_key", ""):
-                # Routing uses AMap coordinates, not raw supplier WGS84 coordinates.
-                location = amap.geocode(f"{meta['name']} {meta.get('address', '')}", request.city)
+            matched = match_hotel_location(meta, request.city, amap)
+            location = matched.location if matched else None
             result.append(Hotel(name=meta["name"], address=meta.get("address", ""), location=location,
+                                location_source="map_poi_match" if matched else "unconfirmed",
+                                map_poi_id=matched.id if matched else "",
                                 type="豪华酒店" if stars >= 5 else "舒适型酒店" if stars >= 4 else "经济型酒店" if stars else "等级未知",
                                 star_rating=stars or None, tier_source="liteapi",
                                 estimated_cost=math.ceil(total / stay_nights(request) / request.room_count),

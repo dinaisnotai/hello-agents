@@ -83,6 +83,69 @@ class AmapService:
         self.cache.set(cache_key, pois)
         return pois
 
+    def search_nearby_poi(
+        self,
+        keywords: str,
+        city: str,
+        location: Location,
+        radius_meters: int = 1500,
+    ) -> List[POIInfo]:
+        """Return provider POIs around a confirmed coordinate; never invent fallback venues."""
+        city = normalize_city_name(city)
+        radius = max(100, min(5000, int(radius_meters)))
+        cache_key = (
+            f"nearby-poi:{city}:{keywords}:{location.longitude:.6f}:"
+            f"{location.latitude:.6f}:{radius}"
+        )
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if not self.settings.amap_api_key:
+            return []
+        try:
+            data = self._request(
+                "/place/around",
+                {
+                    "keywords": keywords,
+                    "location": f"{location.longitude},{location.latitude}",
+                    "radius": radius,
+                    "sortrule": "distance",
+                    "extensions": "all",
+                    "offset": 20,
+                    "page": 1,
+                },
+            )
+            pois = self._parse_pois(data, keywords, city)
+        except Exception as exc:
+            logger.debug("Nearby POI search failed for %s/%s: %s", city, keywords, exc)
+            pois = []
+        self.cache.set(cache_key, pois)
+        return pois
+
+    def resolve_poi_detail(self, poi_id: str, city: str = "") -> Optional[POIInfo]:
+        """Resolve a provider POI ID without guessing a parent attraction."""
+        poi_id = (poi_id or "").strip()
+        if not poi_id or not self.settings.amap_api_key:
+            return None
+        cache_key = f"poi-detail:{poi_id}"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            # Preserve the public raw-detail facade used by the POI API route;
+            # this planning helper only converts its successful response to a
+            # typed POI record.
+            data = self.get_poi_detail(poi_id)
+            if not isinstance(data, dict) or data.get("error"):
+                raise RuntimeError("POI detail is unavailable")
+            pois = self._parse_pois(data, poi_id, normalize_city_name(city))
+            result = next((poi for poi in pois if poi.id == poi_id), pois[0] if pois else None)
+        except Exception as exc:
+            logger.debug("POI detail lookup failed for %s: %s", poi_id, exc)
+            result = None
+        self.cache.set(cache_key, result)
+        return result
+
     def get_weather(self, city: str) -> List[WeatherInfo]:
         city = normalize_city_name(city)
         cache_key = f"weather:{city}"
@@ -153,6 +216,10 @@ class AmapService:
     ) -> RouteInfo:
         """优先使用高德道路路线，失败时退回坐标估算。"""
 
+        route_key = f"actual-route:{city}:{route_type}:{origin.longitude},{origin.latitude}:{destination.longitude},{destination.latitude}"
+        cached = self.cache.get(route_key)
+        if cached is not None:
+            return cached.model_copy(deep=True)
         if self.settings.amap_api_key:
             try:
                 route = self._plan_route_by_locations(
@@ -165,6 +232,7 @@ class AmapService:
 
                 if route.distance > 0 and route.duration > 0:
                     route.description = f"[amap] {route.description}"
+                    self.cache.set(route_key, route.model_copy(deep=True))
                     return route
             except Exception as exc:
                 logger.debug(
@@ -316,6 +384,7 @@ class AmapService:
             location = self._location_from_value(item.get("location")) or self._location_from_lonlat(
                 item.get("longitude"), item.get("latitude")
             )
+            location_source = "provider" if location else "estimated"
             if not location:
                 location = self._fallback_location(city, index)
             biz_ext = item.get("biz_ext") if isinstance(item.get("biz_ext"), dict) else {}
@@ -332,8 +401,10 @@ class AmapService:
                 POIInfo(
                     id=str(item.get("id") or item.get("poi_id") or ""),
                     parent_poi_id=self._parent_poi_id(item),
+                    location_source=location_source,
                     name=str(item.get("name") or f"{city}{keywords}{index + 1}"),
-                    type=str(item.get("type") or item.get("category") or keywords or "景点"),
+                    # A search query is intent, not evidence of the returned venue's type.
+                    type=str(item.get("type") or item.get("category") or ""),
                     address=address or city,
                     location=location,
                     tel=tel,
@@ -432,6 +503,11 @@ class AmapService:
         route = data.get("route") if isinstance(data.get("route"), dict) else data
         paths = route.get("paths") or route.get("transits") or []
         first = paths[0] if paths and isinstance(paths[0], dict) else route
+        if route_type == "transit" and paths:
+            usable = [p for p in paths if isinstance(p, dict) and (self._safe_float(p.get("duration")) or 0) > 0]
+            if usable:
+                # Do not blindly take the provider's first alternative when it walks much more.
+                first = min(usable, key=lambda p: float(p["duration"]) + (self._safe_float(p.get("walking_distance")) or 0) * 0.8)
         distance = self._safe_float(first.get("distance") or route.get("distance")) or 0
         duration = int(self._safe_float(first.get("duration") or route.get("duration")) or 0)
         if route_type == "transit":
@@ -694,11 +770,8 @@ class AmapService:
             return None
 
     def _estimate_ticket_price(self, category: str) -> int:
-        if any(word in category for word in ["博物馆", "公园", "街区", "购物", "美食"]):
-            return 0
-        if any(word in category for word in ["寺", "园", "景区", "自然"]):
-            return 40
-        return 60
+        # Unknown, not free. Date-specific verified facts are applied later.
+        return 0
 
     def _haversine_meters(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         radius = 6371000

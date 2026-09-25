@@ -37,6 +37,9 @@ class FailingEmbedder:
 
 class TravelGuideRAGTest(unittest.TestCase):
     def setUp(self):
+        mode = patch.object(settings, "travel_knowledge_retrieval_mode", "legacy")
+        mode.start()
+        self.addCleanup(mode.stop)
         self.embedder = FakeSemanticEmbedder()
         self.rag = TravelGuideRAG(embedder=self.embedder)
 

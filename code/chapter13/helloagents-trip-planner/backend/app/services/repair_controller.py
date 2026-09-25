@@ -204,21 +204,22 @@ class RepairController:
         target = self._target_day(plan, issue)
         if target is None:
             return None
-        removed = [
+        if self.planner._try_shorten_for_opening_hours(target, request):
+            return "shorten_visit_before_closing"
+        if self.planner._try_reorder_for_opening_hours(target, request):
+            return "reorder_for_opening_hours"
+        late = [
             item for item in target.attractions
             if item.opening_hours_status == "closed"
+            and not self.planner.spatial_planner._is_must_visit(item, request.must_visit)
         ]
-        if not removed:
+        if not late:
             return None
-        target.attractions = [
-            item for item in target.attractions
-            if item.opening_hours_status != "closed"
-        ]
-        self._fill_day(plan, target, request, candidates, minimum=2)
-        return (
-            f"{RepairStrategy.REMOVE_CLOSED_ATTRACTION.value}:"
-            + ",".join(item.name for item in removed)
-        )
+        for attraction in late:
+            for other in plan.days:
+                if other is not target and self.planner._try_move_attraction(target, other, attraction, request):
+                    return "move_visit_within_opening_hours"
+        return None
 
     def _repair_empty_day(
         self,

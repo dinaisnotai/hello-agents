@@ -10,6 +10,12 @@ including attraction interiors; meal and transfer time within the day window.
 Unknown restaurant or hotel information is an advisory, not proof of safety or
 availability. A sandbox quote is never a live booking offer.
 
+For every must-visit, count one parent landmark and its named internal areas
+as one visit. Different provider IDs do not make "Yuanmingyuan", "Yuanmingyuan-West Area", and a
+Yuanmingyuan garden separate itinerary attractions. A `map_poi` meal without a
+provider restaurant type, or with a provider type for charging, transport,
+coffee, drinks, dessert, bakery, or infrastructure, is not a valid main meal.
+
 Return JSON only, matching ExperienceEvaluation. `repair_strategy` MUST be
 exactly one of:
 ADD_UNUSED_CANDIDATE, ADD_NEARBY_COMPLEMENTARY_POI,

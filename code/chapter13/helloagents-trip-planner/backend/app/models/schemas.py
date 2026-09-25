@@ -209,6 +209,14 @@ class Attraction(BaseModel):
     )
     image_url: Optional[str] = None
     ticket_price: int = Field(default=0, ge=0)
+    ticket_price_status: str = "unknown"
+    original_visit_duration: Optional[int] = None
+    visit_duration_note: str = ""
+    ticket_price_source: str = ""
+    ticket_price_note: str = "门票待核实，零值不代表免费"
+    entrance_location: Optional[Location] = None
+    exit_location: Optional[Location] = None
+    access_note: str = "出入口及上下车点待核实"
     score: float = Field(default=0, description="Internal planning score")
     recall_sources: List[str] = Field(
         default_factory=list,
@@ -240,6 +248,9 @@ class Attraction(BaseModel):
 
 
 class Meal(BaseModel):
+    provider_type: str = ""
+    cuisine_hint: str = ""
+    selection_reason: str = ""
     type: str = Field(..., description="breakfast/lunch/dinner/snack")
     name: str
     address: Optional[str] = None
@@ -262,6 +273,8 @@ class Hotel(BaseModel):
     name: str
     address: str = ""
     location: Optional[Location] = None
+    location_source: str = "unknown"
+    map_poi_id: str = ""
     price_range: str = ""
     rating: str = ""
     distance: str = ""
@@ -297,6 +310,7 @@ class RouteStep(BaseModel):
 
 
 class RouteSegment(BaseModel):
+    access_walking_confirmed: bool = True
     day_index: int
     origin: str
     destination: str
@@ -401,6 +415,8 @@ class WeatherInfo(BaseModel):
 
 
 class Budget(BaseModel):
+    unpriced_attractions: List[str] = Field(default_factory=list)
+    pricing_complete: bool = True
     total_attractions: int = 0
     total_hotels: int = 0
     total_meals: int = 0
@@ -441,6 +457,7 @@ class PlanReviewScores(BaseModel):
 
 
 class EvidenceSource(BaseModel):
+    retrieval_purpose: str = ""
     title: str
     city: str = ""
     source: str = ""
@@ -532,6 +549,7 @@ class ReplanRequest(BaseModel):
 
 
 class POIInfo(BaseModel):
+    location_source: str = "provider"
     id: str = ""
     parent_poi_id: str = ""
     visit_key: str = ""

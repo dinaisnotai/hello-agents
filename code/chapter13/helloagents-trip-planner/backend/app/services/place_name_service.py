@@ -36,6 +36,10 @@ def landmark_names_match(left: str, right: str) -> bool:
     return bool(left and right) and normalize_place_name(left) == normalize_place_name(right)
 
 
+def is_known_attraction_name(name: str) -> bool:
+    return normalize_place_name(name) in _PLACE_ALIASES.values()
+
+
 def place_names_match(requested_name: str, poi_name: str) -> bool:
     """Match exact names, full/short variants, and known colloquial aliases."""
 
@@ -44,6 +48,7 @@ def place_names_match(requested_name: str, poi_name: str) -> bool:
     if not requested or not poi:
         return False
     from .venue_policy import venue_kind
-    if venue_kind(requested_name) != venue_kind(poi_name):
+    requested_kind, poi_kind = venue_kind(requested_name), venue_kind(poi_name)
+    if requested_kind != poi_kind and not {requested_kind, poi_kind} <= {"unknown", "attraction"}:
         return False
     return requested == poi or requested in poi or poi in requested

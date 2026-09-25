@@ -287,7 +287,10 @@ class LangGraphTripWorkflow:
             request = TripRequest.model_validate(node_input.request)
             query = self.orchestrator.plan_builder.build_rag_query(request)
             metadata_builder = getattr(self.orchestrator.plan_builder, "build_rag_metadata", None)
-            if callable(metadata_builder):
+            task_search = getattr(self.orchestrator.plan_builder.rag, "search_for_request", None)
+            if callable(task_search):
+                evidence = task_search(request)
+            elif callable(metadata_builder):
                 evidence = self.orchestrator.plan_builder.rag.search(
                     request.city, query, top_k=5, metadata=metadata_builder(request)
                 )

@@ -13,7 +13,11 @@ import re
 from ..config import settings
 from ..services.trip_cost_service import price_day, stay_nights
 from ..services.venue_policy import venue_kind
-from ..services.meal_planner import prepare_meals, schedule_stops
+from ..services.meal_planner import (
+    EARLIEST_DINNER_MINUTES,
+    prepare_meals,
+    schedule_stops,
+)
 from ..models.schemas import (
     Attraction,
     CandidateScoreDebug,
@@ -200,6 +204,9 @@ class POICollector:
                 for poi in self._safe_search(must_visit, request.city)
                 if place_names_match(must_visit, poi.name)
             ]
+            matches = self._resolve_requested_parent(
+                must_visit, matches, request.city
+            )
             for poi in matches:
                 candidates.append(
                     _POICandidate(
@@ -217,6 +224,40 @@ class POICollector:
                 candidate.is_must_visit = True
         return candidates
 
+    def _resolve_requested_parent(
+        self,
+        requested_name: str,
+        matches: Sequence[POIInfo],
+        city: str,
+    ) -> list[POIInfo]:
+        """Add the provider's parent landmark when a search only returns branches.
+
+        A text search for a large scenic area can return its internal gardens
+        and sights before the actual admission POI.  The parent ID is provider
+        evidence, so resolving it is safer than inventing a display name or
+        scheduling several branches to satisfy one user request.
+        """
+        detail_lookup = getattr(self.amap_service, "resolve_poi_detail", None)
+        if not callable(detail_lookup):
+            return list(matches)
+        parent_ids: list[str] = []
+        for poi in matches:
+            parent_id = (poi.parent_poi_id or "").strip()
+            if parent_id and parent_id not in parent_ids:
+                parent_ids.append(parent_id)
+        for parent_id in parent_ids:
+            try:
+                parent = detail_lookup(parent_id, city)
+            except Exception:
+                continue
+            if (
+                parent is not None
+                and place_names_match(requested_name, parent.name)
+                and venue_kind(parent.name, parent.type) == "attraction"
+            ):
+                return [*matches, enrich_poi(parent, city)]
+        return list(matches)
+
     def _filter_candidates(
         self, candidates: List[_POICandidate], request: TripRequest
     ) -> List[_POICandidate]:
@@ -226,54 +267,16 @@ class POICollector:
             candidate
             for candidate in candidates
             if not candidate.categories.intersection(request.avoid_categories)
-            and not self._is_meal_poi(candidate.poi)
-            and not self._is_non_visit_poi(candidate.poi)
             and venue_kind(candidate.poi.name, candidate.poi.type) == "attraction"
         ]
 
     @staticmethod
     def _is_meal_poi(poi: POIInfo) -> bool:
-        text = f"{poi.name} {poi.type}".lower()
-        return any(
-            term in text
-            for term in (
-                "餐厅",
-                "餐馆",
-                "饭店",
-                "美食",
-                "小吃",
-                "咖啡",
-                "restaurant",
-                "food",
-            )
-        )
+        return venue_kind(poi.name, poi.type) == "restaurant"
 
     @staticmethod
     def _is_non_visit_poi(poi: POIInfo) -> bool:
-        """Reject map infrastructure and unavailable places before ranking.
-
-        Map keyword search often returns a road, station, entrance, or a
-        construction-only branch with the same landmark name.  Those records
-        are useful for navigation but cannot fill a travel itinerary.
-        """
-
-        text = f"{poi.name} {poi.type}".lower()
-        return any(
-            term in text
-            for term in (
-                "道路名",
-                "地铁站",
-                "公交站",
-                "交通设施服务",
-                "停车场",
-                "入口",
-                "出口",
-                "派出所",
-                "建设中",
-                "施工中",
-                "暂不开放",
-            )
-        )
+        return venue_kind(poi.name, poi.type) != "attraction"
 
     def _deduplicate_candidates(
         self, candidates: List[_POICandidate], must_visit: Sequence[str] = ()
@@ -283,7 +286,16 @@ class POICollector:
         unique: List[_POICandidate] = []
         for candidate in candidates:
             existing = next(
-                (item for item in unique if self._same_poi(item.poi, candidate.poi)),
+                (
+                    item
+                    for item in unique
+                    if (
+                        self._same_poi(item.poi, candidate.poi)
+                        or self.identity_resolver.same_requested_visit_entity(
+                            item.poi, candidate.poi, must_visit
+                        )
+                    )
+                ),
                 None,
             )
             if existing is None:
@@ -542,7 +554,7 @@ class RouteEvaluator:
     def __init__(self, amap_service: AmapService):
         self.amap_service = amap_service
 
-    def build_day_routes(self, day: DayPlan, city: str) -> List[RouteSegment]:
+    def build_day_routes(self, day: DayPlan, city: str, request: TripRequest | None = None) -> List[RouteSegment]:
         segments: List[RouteSegment] = []
         attractions = day.attractions
 
@@ -553,9 +565,17 @@ class RouteEvaluator:
             hotel_node = (day.hotel.name, day.hotel.address, day.hotel.location)
             route_nodes = [hotel_node, *route_nodes, hotel_node]
 
+        access = {item.name: item for item in attractions}
+        internal_m = sum(item.estimated_internal_walking_km for item in attractions) * 1000
+        limit_m = (request.max_daily_walk_km * 1000 if request and request.max_daily_walk_km is not None else 8000)
+        allowance = min(1000, max(0, limit_m - internal_m) / max(1, len(route_nodes) - 1))
         for origin, destination in zip(route_nodes, route_nodes[1:]):
             origin_name, origin_address, origin_location = origin
             destination_name, destination_address, destination_location = destination
+            if origin_name in access:
+                origin_location = access[origin_name].exit_location or origin_location
+            if destination_name in access:
+                destination_location = access[destination_name].entrance_location or destination_location
             leg_estimate = estimate_leg(
                 origin_location, destination_location, day.transportation
             )
@@ -567,22 +587,21 @@ class RouteEvaluator:
                 > day.max_walking_leg_minutes
             ):
                 route_type = "transit"
-            route = self.amap_service.route_between_pois(
-                origin_name=origin_name,
-                origin_address=origin_address,
-                origin=origin_location,
-                destination_name=destination_name,
-                destination_address=destination_address,
-                destination=destination_location,
-                city=city,
-                route_type=route_type,
-            )
+            route_args = dict(origin_name=origin_name, origin_address=origin_address, origin=origin_location,
+                              destination_name=destination_name, destination_address=destination_address,
+                              destination=destination_location, city=city)
+            if any(word in day.transportation.lower() for word in ("混合", "mixed")):
+                from ..services.mixed_route_selector import select_mixed_route
+                route = select_mixed_route(self.amap_service, route_args, request, allowance)
+            else:
+                route = self.amap_service.route_between_pois(**route_args, route_type=route_type)
             segments.append(
                 RouteSegment(
                     day_index=day.day_index,
                     origin=origin_name,
                     destination=destination_name,
                     route_type=route.route_type,
+                    access_walking_confirmed=route.route_type != "driving",
                     distance_meters=route.distance,
                     duration_minutes=max(1, int(route.duration / 60)),
                     walking_distance_meters=route.walking_distance,
@@ -631,7 +650,10 @@ class BudgetEstimator:
             total_transportation += transport_cost
         total = total_attractions + total_hotels + total_meals + total_transportation
         remaining = request.budget_limit - total if request.budget_limit is not None else None
+        unpriced = sorted({a.name for day in days for a in day.attractions if a.ticket_price_status == "unknown" and a.ticket_price == 0})
         return Budget(
+            unpriced_attractions=unpriced,
+            pricing_complete=not unpriced,
             total_attractions=total_attractions,
             total_hotels=total_hotels,
             total_meals=total_meals,
@@ -655,7 +677,7 @@ class ConstraintChecker:
                     actual=f"{plan.budget.total}元",
                     expected=f"不超过{request.budget_limit}元",
                     severity="blocker" if not passed else "info",
-                    message="预算满足要求" if passed else "预算超出，需要减少酒店/门票/餐饮成本",
+                    message=("已计价部分未超预算，仍有门票待核实" if plan.budget.unpriced_attractions else "预算满足要求") if passed else "预算超出，需要减少酒店/门票/餐饮成本",
                 )
             )
 
@@ -856,12 +878,12 @@ class ConstraintChecker:
             )
             items.append(
                 ConstraintItem(
-                    name="Opening-hours feasibility",
+                    name="营业时间可行性",
                     passed=False,
                     actual=details,
-                    expected="Each visit must finish before closing time and enter before last entry",
+                    expected="须在停止入场前进入，并在闭馆前结束游览",
                     severity="blocker",
-                    message="At least one attraction is scheduled outside its published opening hours",
+                    message="部分景点的游览时段超出开放时间，需要调整顺序或日期",
                 )
             )
 
@@ -874,12 +896,12 @@ class ConstraintChecker:
         if unknown_hour_attractions:
             items.append(
                 ConstraintItem(
-                    name="Opening-hours data coverage",
+                    name="营业时间待核实",
                     passed=True,
                     actual=", ".join(unknown_hour_attractions),
-                    expected="Verify these attractions with the official source before departure",
+                    expected="出行前通过官方渠道核实营业时间",
                     severity="warning",
-                    message="Some attractions have no reliable opening-hours data; they require confirmation",
+                    message="部分景点缺少可靠营业时间，需进一步核实",
                 )
             )
 
@@ -1255,10 +1277,10 @@ class MultiAgentTripPlanner:
         if self.rag is not None:
             query = self.build_rag_query(request)
             try:
-                evidence = self.rag.search(
-                    request.city, query, top_k=5,
-                    metadata=self.build_rag_metadata(request),
-                )
+                if callable(getattr(self.rag, "search_for_request", None)):
+                    evidence = self.rag.search_for_request(request)
+                else:
+                    evidence = self.rag.search(request.city, query, top_k=5, metadata=self.build_rag_metadata(request))
             except TypeError:
                 evidence = self.rag.search(request.city, query, top_k=5)
 
@@ -1375,6 +1397,12 @@ class MultiAgentTripPlanner:
                 )[:20]
             ],
         )
+        if hotel_candidates:
+            selected_hotel = self.accommodation_selector.select_for_days(
+                effective_request, hotel_candidates, days, getattr(self, "amap_service", None)
+            )
+            for day in days:
+                day.hotel = deepcopy(selected_hotel)
         if defer_refinement:
             # LangGraph owns the bounded repair/review stages. Building its
             # draft must not secretly run another set of mutations first.
@@ -1799,7 +1827,24 @@ class MultiAgentTripPlanner:
                 fields.append(f"{prefix}.hotel")
             if old.accommodation != new.accommodation:
                 fields.append(f"{prefix}.accommodation")
-            if old.schedule_blocks != new.schedule_blocks:
+            # The early-dinner rest block is recalculated from route timing;
+            # it is derived output, not a repair mutation. User constraints
+            # remain in scope and still participate in mutation validation.
+            old_explicit_blocks = [
+                block for block in old.schedule_blocks
+                if not (
+                    block.type == "rest"
+                    and block.reason.startswith("自动安排：晚餐前休息")
+                )
+            ]
+            new_explicit_blocks = [
+                block for block in new.schedule_blocks
+                if not (
+                    block.type == "rest"
+                    and block.reason.startswith("自动安排：晚餐前休息")
+                )
+            ]
+            if old_explicit_blocks != new_explicit_blocks:
                 fields.append(f"{prefix}.schedule_blocks")
         return fields
 
@@ -2207,9 +2252,11 @@ class MultiAgentTripPlanner:
                     ]
                 )
             )
+        previous_meal_ids = set()
         for day in plan.days:
             self._annotate_available_window(day, len(plan.days), request)
-            self._recalculate_day(day, request)
+            self._recalculate_day(day, request, previous_meal_ids=previous_meal_ids)
+            previous_meal_ids.update(meal.poi_id for meal in day.meals if meal.poi_id)
         plan.route_segments = [segment for day in plan.days for segment in day.route_segments]
         plan.budget = self.budget_estimator.estimate(plan.days, request)
         legacy_report = self.constraint_checker.check(plan, request)
@@ -2269,13 +2316,85 @@ class MultiAgentTripPlanner:
         day.available_minutes = max(0, end - start)
         day.partial_day_reason = reason
 
-    def _recalculate_day(self, day: DayPlan, request: TripRequest) -> None:
-        prepare_meals(day, request, getattr(self, "amap_service", None))
-        day.route_segments = self.route_evaluator.build_day_routes(day, request.city)
+    def _recalculate_day(self, day: DayPlan, request: TripRequest, *, previous_meal_ids=()) -> None:
+        from ..services.visit_facts import apply_visit_facts, resolve_access_points
+        for attraction in day.attractions:
+            apply_visit_facts(attraction, request.city, day.date)
+            resolve_access_points(attraction, request.city, getattr(self, "amap_service", None))
+        prepare_meals(day, request, getattr(self, "amap_service", None), previous_meal_ids=previous_meal_ids)
+        day.route_segments = self.route_evaluator.build_day_routes(day, request.city, request)
         self._schedule_day_opening_hours(day, request)
         self._update_day_metrics(
             day, request.pace, daily_time_budget_minutes(request)
         )
+
+    def _try_shorten_for_opening_hours(self, day: DayPlan, request: TripRequest) -> bool:
+        """Allow a small early departure, bounded against the original dwell time."""
+        closed = [a for a in day.attractions if a.opening_hours_status == "closed"]
+        if not closed:
+            return False
+        candidate = deepcopy(day)
+        for attraction in candidate.attractions:
+            if attraction.opening_hours_status != "closed":
+                continue
+            if not attraction.closing_time or not attraction.planned_departure_time or not attraction.planned_arrival_time:
+                return False
+            latest = _clock_minutes(attraction.latest_entry_time or attraction.closing_time, 24 * 60)
+            if _clock_minutes(attraction.planned_arrival_time, 24 * 60) > latest:
+                return False
+            excess = _clock_minutes(attraction.planned_departure_time, 0) - _clock_minutes(attraction.closing_time, 24 * 60)
+            original = attraction.original_visit_duration or attraction.visit_duration
+            minimum = max(30, original - min(60, original // 4))
+            shortened = attraction.visit_duration - max(0, excess)
+            if excess <= 0 or shortened < minimum:
+                return False
+            attraction.original_visit_duration = original
+            attraction.visit_duration = shortened
+            attraction.visit_duration_note = f"为在闭馆前离开，游览由{original}分钟调整为{shortened}分钟；保留景点"
+        self._recalculate_day(candidate, request)
+        if any(a.opening_hours_status == "closed" for a in candidate.attractions):
+            return False
+        # Fixing closing time is useful even when another existing daily-window
+        # issue remains; the sandbox still rejects newly introduced hard failures.
+        if self._day_exceeds_window(candidate, request) and candidate.daily_duration_minutes > day.daily_duration_minutes:
+            return False
+        old_walk = day.daily_walking_distance_km + sum(a.estimated_internal_walking_km for a in day.attractions)
+        new_walk = candidate.daily_walking_distance_km + sum(a.estimated_internal_walking_km for a in candidate.attractions)
+        if request.max_daily_walk_km is not None and new_walk > max(request.max_daily_walk_km, old_walk) + 0.01:
+            return False
+        for field in type(day).model_fields:
+            setattr(day, field, getattr(candidate, field))
+        return True
+
+    def _try_reorder_for_opening_hours(self, day: DayPlan, request: TripRequest) -> bool:
+        """Try at most three order changes before sacrificing a visit; never shorten it."""
+        closed = [a for a in day.attractions if a.opening_hours_status == "closed"]
+        if not closed or len(day.attractions) < 2:
+            return False
+        orders = [sorted(day.attractions, key=lambda a: min(
+            _clock_minutes(a.latest_entry_time, 24 * 60),
+            _clock_minutes(a.closing_time, 24 * 60) - a.visit_duration))]
+        orders.extend([[a, *[b for b in day.attractions if b is not a]] for a in closed[:2]])
+        seen = {tuple(a.name for a in day.attractions)}
+        old_walk = day.daily_walking_distance_km + sum(a.estimated_internal_walking_km for a in day.attractions)
+        for order in orders:
+            key = tuple(a.name for a in order)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidate = deepcopy(day)
+            candidate.attractions = deepcopy(order)
+            candidate.meals = []
+            self._recalculate_day(candidate, request)
+            if not self._day_is_feasible(candidate, request):
+                continue
+            walk = candidate.daily_walking_distance_km + sum(a.estimated_internal_walking_km for a in candidate.attractions)
+            if request.max_daily_walk_km is not None and walk > max(request.max_daily_walk_km, old_walk) + 0.01:
+                continue
+            for field in type(day).model_fields:
+                setattr(day, field, getattr(candidate, field))
+            return True
+        return False
 
     def _apply_next_repair(
         self,
@@ -2283,6 +2402,11 @@ class MultiAgentTripPlanner:
         request: TripRequest,
         available_attractions: List[Attraction],
     ) -> Optional[tuple[str, str]]:
+        for day in plan.days:
+            if self._try_shorten_for_opening_hours(day, request):
+                return ("shorten_visit_before_closing", f"第{day.day_index + 1}天小幅缩短停留，在闭馆前离开；未移除景点")
+            if self._try_reorder_for_opening_hours(day, request):
+                return ("reorder_for_opening_hours", f"调整第{day.day_index + 1}天顺序以满足闭馆时间；保留景点及游览时长")
         hard_violations = [
             item
             for item in plan.validation_result.violations
@@ -2484,11 +2608,9 @@ class MultiAgentTripPlanner:
                         f"to day {target_day.day_index + 1}, where it fits opening hours and return time",
                     )
 
-            donor_day.attractions.remove(attraction)
-            return (
-                "remove_closed_optional_attraction",
-                f"Removed {attraction.name}; its scheduled visit is outside published opening hours",
-            )
+            # A timing conflict is not proof that the venue itself is closed.
+            # Keep the user's visit and expose the conflict instead of silently deleting it.
+            return None
 
         area_jump_days = [
             day
@@ -3077,6 +3199,14 @@ class MultiAgentTripPlanner:
     def _schedule_day_opening_hours(self, day: DayPlan, request: TripRequest) -> None:
         """Calculate visit windows after routes are known and mark hard violations."""
 
+        # Recalculation is idempotent: replace only the rest block generated
+        # for an early dinner, while retaining a user's explicit constraints.
+        auto_rest_prefix = "自动安排：晚餐前休息"
+        day.schedule_blocks = [
+            block
+            for block in day.schedule_blocks
+            if not (block.type == "rest" and block.reason.startswith(auto_rest_prefix))
+        ]
         current = _clock_minutes(request.daily_start_time, 9 * 60)
         start_minutes = current
         day.planned_start_time = _format_clock(current)
@@ -3092,8 +3222,54 @@ class MultiAgentTripPlanner:
                 incoming.planned_departure_time = _format_clock(current)
                 incoming.planned_arrival_time = _format_clock(arrival)
             if isinstance(attraction, Meal):
-                attraction.planned_arrival_time = _format_clock(arrival)
-                current = arrival + attraction.duration_minutes
+                meal_start = arrival
+                if attraction.type == "dinner":
+                    latest_day_end = _clock_minutes(request.daily_end_time, 20 * 60)
+                    if (
+                        day.day_index == request.travel_days - 1
+                        and request.departure_time
+                    ):
+                        latest_day_end = min(
+                            latest_day_end,
+                            _clock_minutes(request.departure_time, latest_day_end),
+                        )
+                    return_minutes = 0
+                    if day.hotel and day.route_segments:
+                        return_segment = day.route_segments[-1]
+                        if return_segment.destination == day.hotel.name:
+                            return_minutes = return_segment.duration_minutes
+                    proposed_start = max(arrival, EARLIEST_DINNER_MINUTES)
+                    if (
+                        proposed_start
+                        + attraction.duration_minutes
+                        + return_minutes
+                        <= latest_day_end
+                    ):
+                        meal_start = proposed_start
+                    if meal_start - arrival >= 30:
+                        near_hotel = bool(
+                            day.hotel
+                            and day.hotel.location
+                            and attraction.location
+                            and haversine_meters(
+                                day.hotel.location, attraction.location
+                            ) <= 1500
+                        )
+                        reason = (
+                            "自动安排：晚餐前休息（抵达酒店附近后休息）"
+                            if near_hotel
+                            else "自动安排：晚餐前休息（无后续景点，预留休息/自由活动）"
+                        )
+                        day.schedule_blocks.append(
+                            ScheduleBlock(
+                                type="rest",
+                                start_time=_format_clock(arrival),
+                                end_time=_format_clock(meal_start),
+                                reason=reason,
+                            )
+                        )
+                attraction.planned_arrival_time = _format_clock(meal_start)
+                current = meal_start + attraction.duration_minutes
                 attraction.planned_departure_time = _format_clock(current)
                 continue
             opening = _clock_minutes(attraction.opening_time, 0)
@@ -3244,7 +3420,10 @@ class MultiAgentTripPlanner:
         if request.budget_limit:
             base += f" 总预算目标为{request.budget_limit}元。"
         if evidence:
-            base += " 规划参考了本地攻略证据，结果页可查看来源片段。"
+            if settings.enable_travel_knowledge:
+                base += " 已使用通过置信度门槛的本地知识补充候选属性和行程说明，结果页可查看来源片段。"
+            else:
+                base += " 已检索到本地攻略作为说明参考；当前未启用其对候选评分和时长的自动投影，因此它不会替代地图、路线和约束决策。"
         return base
 
     def build_rag_query(self, request: TripRequest) -> str:

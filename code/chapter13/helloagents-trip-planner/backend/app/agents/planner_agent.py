@@ -27,7 +27,11 @@ from ..services.planning_observability import refresh_planning_trace
 from ..services.user_warning_service import curate_user_warnings
 from ..services.context_governance import RoleContextBuilder
 from ..services.travel_knowledge_service import get_travel_knowledge_service
-from .agent_utils import parse_agent_result, run_stateless_agent
+from .agent_utils import (
+    load_agent_json_object,
+    parse_agent_result,
+    run_stateless_agent,
+)
 from .prompts import PLANNER_PROMPT
 from .trip_planner_agent import MultiAgentTripPlanner
 
@@ -37,6 +41,17 @@ logger = logging.getLogger("uvicorn.error")
 
 class PlannerAgent:
     """Integrate specialist outputs without delegating arithmetic to the LLM."""
+
+    # These are observed, semantically unambiguous names from earlier review
+    # prompts. Mapping them preserves a useful grounded issue while keeping
+    # every repair inside RepairController's explicit strategy vocabulary.
+    REVIEW_STRATEGY_ALIASES = {
+        "swap_weather_sensitive_attractions": "SWAP_WITH_INDOOR_CANDIDATE",
+        "add_weather_backup": "ADD_WEATHER_BACKUP",
+        "remove_duplicate": "REMOVE_DUPLICATE",
+        "recluster_route": "RECLUSTER_ROUTE",
+        "reselect_hotel": "RESELECT_HOTEL",
+    }
 
     def __init__(
         self,
@@ -82,6 +97,7 @@ class PlannerAgent:
             hotel=hotel,
             weather=weather_result.weather,
             evidence=evidence,
+            hotel_candidates=candidates,
         )
         plan.risk_warnings = sorted(
             set([*plan.risk_warnings, *weather_result.risk_summary])
@@ -148,10 +164,7 @@ class PlannerAgent:
                 (perf_counter() - review_started_at) * 1000,
             )
             try:
-                evaluation = parse_agent_result(
-                    raw_result,
-                    ExperienceEvaluation,
-                )
+                evaluation = self._parse_experience_evaluation(raw_result)
                 evaluation = self._ground_evaluation(evaluation, plan, evidence, available_attractions or [])
                 for issue in evaluation.issues:
                     issue.source = "llm"
@@ -204,28 +217,18 @@ class PlannerAgent:
                 )
             except ValidationError as exc:
                 if self._has_unknown_strategy(exc):
-                    evaluation = ExperienceEvaluation(
-                        **{
-                            "pass": True,
-                            "overall_score": (
-                                plan.quality_evaluation.overall_score
-                                if plan.quality_evaluation
-                                else 10
-                            ),
-                            "issues": [],
-                            "source": "llm",
-                            "contract_errors": [
-                                "Experience reviewer contract error: "
-                                + self._contract_error_message(exc)
-                            ],
-                        }
+                    contract_error = (
+                        "Experience reviewer contract error: "
+                        + self._contract_error_message(exc)
                     )
-                    plan.quality_evaluation = evaluation
-                    review_contract_errors.extend(evaluation.contract_errors)
+                    # A malformed review has provided no trustworthy verdict.
+                    # Never turn it into an empty, passing LLM evaluation:
+                    # continue with the deterministic gate instead.
+                    review_contract_errors.append(contract_error)
                     plan.risk_warnings = sorted(
-                        set([*plan.risk_warnings, *evaluation.contract_errors])
+                        set([*plan.risk_warnings, contract_error])
                     )
-                    logger.error(evaluation.contract_errors[0])
+                    logger.error(contract_error)
                 else:
                     review = parse_agent_result(raw_result, PlannerReviewResult)
                     self._apply_review(plan, review, evidence)
@@ -248,7 +251,11 @@ class PlannerAgent:
         if review_contract_errors:
             if plan.quality_evaluation is None:
                 plan.quality_evaluation = ExperienceEvaluation(
-                    **{"pass": True}, source="deterministic"
+                    **{
+                        "pass": False,
+                        "overall_score": 0,
+                        "source": "deterministic",
+                    }
                 )
             plan.quality_evaluation.contract_errors = list(dict.fromkeys([
                 *plan.quality_evaluation.contract_errors,
@@ -301,22 +308,13 @@ class PlannerAgent:
                 json.dumps(payload, ensure_ascii=False),
             )
         try:
-            evaluation = parse_agent_result(raw_result, ExperienceEvaluation)
+            evaluation = self._parse_experience_evaluation(raw_result)
         except ValidationError as exc:
-            return ExperienceEvaluation(
-                **{
-                    "pass": True,
-                    "overall_score": plan.quality_evaluation.overall_score
-                    if plan.quality_evaluation
-                    else 10,
-                    "issues": [],
-                    "source": "llm",
-                    "contract_errors": [
-                        "Experience reviewer contract error: "
-                        + self._contract_error_message(exc)
-                    ],
-                }
+            logger.error(
+                "Experience reviewer contract error during repair: %s",
+                self._contract_error_message(exc),
             )
+            return None
         evaluation = self._ground_evaluation(evaluation, plan, evidence, available_attractions or [])
         evaluation.source = "llm"
         for issue in evaluation.issues:
@@ -342,6 +340,33 @@ class PlannerAgent:
         evaluation.issues = accepted
         evaluation.passed = not any(item.is_blocking for item in accepted)
         return evaluation
+
+    @classmethod
+    def _parse_experience_evaluation(cls, raw_result: str) -> ExperienceEvaluation:
+        """Parse review JSON, normalizing only documented strategy aliases."""
+
+        try:
+            return parse_agent_result(raw_result, ExperienceEvaluation)
+        except ValidationError as original_error:
+            if not cls._has_unknown_strategy(original_error):
+                raise
+
+            payload = load_agent_json_object(raw_result)
+            normalized = False
+            for issue in payload.get("issues", []):
+                if not isinstance(issue, dict):
+                    continue
+                strategy = issue.get("repair_strategy")
+                alias = cls.REVIEW_STRATEGY_ALIASES.get(
+                    str(strategy or "").strip().lower()
+                )
+                if alias:
+                    issue["repair_strategy"] = alias
+                    normalized = True
+            if not normalized:
+                raise original_error
+            logger.info("Normalized known LLM review repair-strategy alias")
+            return ExperienceEvaluation.model_validate(payload)
 
     def _build_review_payload(
         self,

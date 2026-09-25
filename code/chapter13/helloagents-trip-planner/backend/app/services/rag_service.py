@@ -114,6 +114,26 @@ class TravelGuideRAG:
         self._hybrid_retriever: HybridKnowledgeRetriever | None = None
         self._load_lock = Lock()
 
+    def search_for_request(self, request, top_k: int = 8):
+        """Retrieve per planning decision, preserving coverage instead of one broad top-k."""
+        topics = [
+            ("游览", " ".join([*request.preferences, *request.must_visit, request.free_text_input or "", "游览时长 景点组合"])),
+            ("住宿", f"住宿区域 地铁 酒店 {request.hotel_area or ''}"),
+            ("交通", f"{request.transportation} 步行 出入口 交通"),
+            ("餐饮", "餐饮 正餐 酒店周边 营业 饮食限制"),
+        ]
+        output, seen = [], set()
+        for topic, query in topics:
+            for item in self.search(request.city, query, top_k=2):
+                key = (item.source, item.title)
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = item.model_copy(deep=True)
+                item.retrieval_purpose = topic
+                output.append(item)
+        return output[:top_k]
+
     def search(
         self,
         city: str,
@@ -125,7 +145,7 @@ class TravelGuideRAG:
         city = normalize_city_name(city)
         self._load()
 
-        if settings.enable_travel_knowledge and settings.travel_knowledge_retrieval_mode == "hybrid":
+        if settings.travel_knowledge_retrieval_mode == "hybrid":
             return self._hybrid_search(city, query, top_k, metadata=metadata)
 
         candidates = [chunk for chunk in self._chunks if not city or chunk["city"] == city]
@@ -252,6 +272,8 @@ class TravelGuideRAG:
                 clean = section.strip()
                 if not clean:
                     continue
+                if not clean.startswith("## "):
+                    continue  # File-level disclaimers are not planning evidence.
                 title_match = re.search(r"^#+\s+(.+)$", clean, re.MULTILINE)
                 title = title_match.group(1).strip() if title_match else path.stem
                 tags = " ".join(re.findall(r"\[([^\]]+)\]", title))
@@ -268,7 +290,7 @@ class TravelGuideRAG:
 
         self._chunks = chunks
         self._loaded = True
-        if not chunks or (settings.enable_travel_knowledge and settings.travel_knowledge_retrieval_mode == "hybrid"):
+        if not chunks or settings.travel_knowledge_retrieval_mode == "hybrid":
             return
 
         try:

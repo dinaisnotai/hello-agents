@@ -79,6 +79,38 @@ class POIIdentityResolver:
             return True
         return place_names_match(left.name, right.name) and self._nearby(left, right)
 
+    def same_requested_visit_entity(
+        self,
+        left: Attraction | POIInfo,
+        right: Attraction | POIInfo,
+        must_visit: Iterable[str],
+    ) -> bool:
+        """Treat branches of one user-requested landmark as one visit.
+
+        Map providers commonly return a parent attraction alongside internal
+        scenic areas. Their parent IDs are often incomplete or form several
+        levels, so provider identity alone cannot answer the user-level
+        question: "did we already schedule Yuanmingyuan?"  This rule is only
+        active for explicit must-visits; it does not collapse arbitrary nearby
+        attractions that merely happen to share a word in their names.
+        """
+        left_roots = self._requested_visit_roots(left, must_visit)
+        return bool(left_roots and left_roots.intersection(
+            self._requested_visit_roots(right, must_visit)
+        ))
+
+    @staticmethod
+    def _requested_visit_roots(
+        poi: Attraction | POIInfo,
+        must_visit: Iterable[str],
+    ) -> set[str]:
+        return {
+            normalize_place_name(requested)
+            for requested in must_visit
+            if len(normalize_place_name(requested)) >= 2
+            and place_names_match(requested, poi.name)
+        }
+
     def deduplicate(
         self,
         pois: Sequence[POI],
@@ -92,7 +124,12 @@ class POIIdentityResolver:
                 (
                     candidate_group
                     for candidate_group in groups
-                    if self.same_visit_entity(candidate_group[0], item)
+                    if (
+                        self.same_visit_entity(candidate_group[0], item)
+                        or self.same_requested_visit_entity(
+                            candidate_group[0], item, must_visit
+                        )
+                    )
                 ),
                 None,
             )
@@ -141,7 +178,12 @@ class POIIdentityResolver:
                     (
                         existing
                         for existing in kept
-                        if self.same_visit_entity(existing, attraction)
+                        if (
+                            self.same_visit_entity(existing, attraction)
+                            or self.same_requested_visit_entity(
+                                existing, attraction, must_visit
+                            )
+                        )
                     ),
                     None,
                 )
@@ -160,7 +202,11 @@ class POIIdentityResolver:
                     place_names_match(name, duplicate.name)
                     for name in must_visit
                 )
-                if later_required and not earlier_required:
+                representative = self._representative(
+                    [duplicate, attraction], must_visit
+                )
+                replace_with_later = representative is attraction
+                if later_required and (not earlier_required or replace_with_later):
                     for previous_day in plan.days:
                         if duplicate in previous_day.attractions:
                             position = previous_day.attractions.index(duplicate)
@@ -240,7 +286,14 @@ class POIIdentityResolver:
                 representative.description = (
                     (representative.description or "") + highlight
                 ).strip("；")
-        shared_key = group[0].visit_key
+        requested_roots = set().union(
+            *(self._requested_visit_roots(item, must_visit) for item in group)
+        )
+        shared_key = (
+            f"requested:{sorted(requested_roots)[0]}"
+            if requested_roots
+            else group[0].visit_key
+        )
         representative.visit_key = shared_key
         if isinstance(representative, Attraction):
             representative.recall_sources = sorted(
